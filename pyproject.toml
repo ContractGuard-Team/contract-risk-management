@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "contract-risk-management"
+version = "0.1.0"
+description = "Three-agent contract analysis base with Hermes and AWS Bedrock"
+requires-python = ">=3.10"
+dependencies = ["boto3>=1.34.59,<2", "httpx>=0.27,<1", "PyYAML>=6,<7"]
+
+[tool.setuptools.packages.find]
+include = ["agents*", "common*", "integrations*", "hermes_integration*", "orchestration*"]
+exclude = ["third_party*", "tests*"]
+
+[tool.setuptools.package-data]
+"agents.agent_1_classification" = ["*.yaml", "*.md", "prompts/*.md", "context/*.md"]
+"agents.agent_2_risk_scoring" = ["*.yaml", "*.md", "prompts/*.md", "context/*.md"]
+"agents.agent_3_recommendation" = ["*.yaml", "*.md", "prompts/*.md", "context/*.md"]

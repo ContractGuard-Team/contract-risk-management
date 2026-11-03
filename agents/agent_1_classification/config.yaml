@@ -1,0 +1,10 @@
+# TODO: Fill values later. Explicit settings > agent env > global env > this file.
+region:
+model_id:
+profile:
+# TODO: Set only options supported by the chosen model.
+inference_config:
+  maxTokens:
+  temperature:
+  topP:
+  stopSequences:
