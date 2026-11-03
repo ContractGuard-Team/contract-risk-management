@@ -1,0 +1,9 @@
+.git
+.venv
+.venv312
+.python
+.cache
+**/__pycache__
+**/*.pyc
+.env
+**/*.sqlite3*

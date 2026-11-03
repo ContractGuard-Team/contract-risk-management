@@ -1,0 +1,14 @@
+# TODO: Input budget must reserve room for model output and provider overhead.
+# The default counter is a conservative UTF-8 byte estimate, not a model tokenizer.
+agent_1_classification:
+  max_input_tokens:
+  summary_max_tokens:
+  keep_recent_turns: 1
+agent_2_risk_scoring:
+  max_input_tokens:
+  summary_max_tokens:
+  keep_recent_turns: 1
+agent_3_recommendation:
+  max_input_tokens:
+  summary_max_tokens:
+  keep_recent_turns: 1

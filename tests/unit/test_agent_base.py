@@ -21,9 +21,17 @@ from hermes_integration.memory_adapter import memory_context
 from hermes_integration.tool_registry import ToolRegistry
 from integrations.aws.bedrock_client import BedrockClient
 from orchestration.pipeline import ContractRiskPipeline
+from orchestration.cache import ContractCache
+from hermes_integration.context_budget import MemoryPolicy
+from monitoring.langfuse import NullObserver
 
 
 SETTINGS = BedrockSettings("test-region", "test-model")
+
+
+def test_pipeline(agents):
+    return ContractRiskPipeline(agents, cache=ContractCache(), observer=NullObserver(),
+        policies={key: MemoryPolicy(100000, 1000) for key in agents})
 
 
 class FakeClient:
@@ -95,7 +103,7 @@ class AgentBaseTests(unittest.TestCase):
         provider = HermesBedrockProvider(SETTINGS, client)
         with configured_agents(provider) as agents:
             agents["agent_1_classification"].inference_config = {"maxTokens": 42}
-            result = ContractRiskPipeline(agents).run("Hợp đồng thử", {"case": ["one"]})
+            result = test_pipeline(agents).run("Hợp đồng thử", {"case": ["one"]})
         self.assertEqual(list(result), list(agents))
         self.assertEqual(len(client.requests), 3)
         self.assertEqual(client.requests[0]["inferenceConfig"], {"maxTokens": 42})
@@ -105,9 +113,10 @@ class AgentBaseTests(unittest.TestCase):
             self.assertIn("Test instructions for plan.md", request["system"][0]["text"])
             self.assertIn("Test instructions for constraints.md", request["system"][0]["text"])
         body = json.loads(client.requests[2]["messages"][0]["content"][0]["text"])
-        self.assertEqual(body["content"], "Hợp đồng thử")
-        self.assertEqual(body["context"], {"case": ["one"]})
-        self.assertEqual(list(body["previous_results"]), list(agents)[:2])
+        self.assertEqual(body["context"]["case"], ["one"])
+        self.assertEqual(body["context"]["workflow"]["risk_scoring"]["text"], "model result")
+        second_body = json.loads(client.requests[1]["messages"][0]["content"][0]["text"])
+        self.assertEqual(second_body["context"]["workflow"]["classification"]["chunk_count"], 1)
         self.assertEqual(result["agent_3_recommendation"]["usage"]["outputTokens"], 3)
 
     def test_named_agent_methods_return_specific_output(self):
@@ -145,13 +154,13 @@ class AgentBaseTests(unittest.TestCase):
             agent = next(iter(agents.values()))
             built = agent.build_context(AgentRequest("x", context))
             built["context"]["nested"].append("changed")
-            pipeline = ContractRiskPipeline(agents)
+            pipeline = test_pipeline(agents)
             pipeline.run("first", context)
             pipeline.run("second")
         self.assertEqual(context, {"nested": ["original"]})
         second_run = json.loads(provider.calls[3][1]["content"])
         self.assertEqual(second_run["previous_results"], {})
-        self.assertEqual(second_run["context"], {})
+        self.assertNotIn("nested", second_run["context"])
 
     def test_pipeline_stops_on_failure(self):
         provider = FakeProvider()
@@ -159,7 +168,7 @@ class AgentBaseTests(unittest.TestCase):
             failing = agents["agent_2_risk_scoring"]
             with patch.object(failing, "run", side_effect=RuntimeError("failed")):
                 with self.assertRaisesRegex(RuntimeError, "failed"):
-                    ContractRiskPipeline(agents).run("contract")
+                    test_pipeline(agents).run("contract")
         self.assertEqual(len(provider.calls), 1)
 
     def test_tools_require_binding_and_use_explicit_handler(self):

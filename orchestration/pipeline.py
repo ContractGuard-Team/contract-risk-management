@@ -1,23 +1,105 @@
-from copy import deepcopy
 from dataclasses import asdict
+import hashlib
+from pathlib import Path
+from uuid import uuid4
+from langgraph.checkpoint.memory import InMemorySaver
 
-from common.schemas.agent_messages import AgentRequest
+from common.exceptions import ConfigurationError
+from common.schemas.contract import ContractChunk, ContractInput, canonical
 from hermes_integration.agent_factory import create_agents
+from hermes_integration.context_budget import MemoryPolicy, conservative_token_count
+from hermes_integration.summarizer import ModelMemorySummarizer
+from monitoring.langfuse import LangfuseObserver
+from orchestration.cache import ContractCache
+from orchestration.workflow import AGENT_IDS, WorkflowSteps, build_workflow
+
+
+def load_memory_policies(path=None):
+    import yaml
+    path = Path(path) if path else Path(__file__).resolve().parents[1] / "configs/memory.yaml"
+    raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+    if not isinstance(raw, dict):
+        raise ConfigurationError(f"TODO: configure memory budgets in {path}")
+    try:
+        return {agent_id: MemoryPolicy(**raw[agent_id]) for agent_id in AGENT_IDS}
+    except (KeyError, TypeError) as exc:
+        raise ConfigurationError(f"TODO: configure each agent's memory policy in {path}") from exc
 
 
 class ContractRiskPipeline:
-    """Minimal same-process chain; not a distributed/container workflow."""
+    """LangGraph workflow; SQLite stores full results, Hermes manages active context."""
+    agent_order = AGENT_IDS
 
-    agent_order = ("agent_1_classification", "agent_2_risk_scoring", "agent_3_recommendation")
-
-    def __init__(self, agents=None):
+    def __init__(self, agents=None, *, policies=None, cache=None, summarizers=None, observer=None,
+                 checkpointer=None, counter=conservative_token_count, cache_revision="contract-workflow-v1"):
         self.agents = create_agents() if agents is None else agents
+        self.policies = load_memory_policies() if policies is None else policies
+        if set(self.policies) != set(AGENT_IDS) or set(self.agents) != set(AGENT_IDS):
+            raise ConfigurationError("Exactly three agents and three memory policies are required")
+        self.cache = cache if cache is not None else ContractCache(".cache/contracts.sqlite3")
+        self.observer = observer if observer is not None else LangfuseObserver.from_env()
+        self.summarizers = summarizers if summarizers is not None else {
+            agent_id: ModelMemorySummarizer(agent.provider, self.observer, counter=counter)
+            for agent_id, agent in self.agents.items()}
+        self.counter, self.cache_revision = counter, cache_revision
+        saver = checkpointer if checkpointer is not None else InMemorySaver()
+        self.graph = build_workflow(WorkflowSteps(self.agents, self.cache, self.policies,
+                                                 self.summarizers, self.observer, counter), saver)
+
+    def _execution(self):
+        specs = {"revision": self.cache_revision}
+        for agent_id, agent in self.agents.items():
+            instructions = {}
+            for name in ("prompts/system.md", agent.task_prompt, "soul.md", "plan.md",
+                         "constraints.md", "context/instructions.md", "config.yaml"):
+                path = agent.directory / name
+                instructions[name] = path.read_text(encoding="utf-8") if path.is_file() else ""
+            settings = getattr(agent.provider, "settings", None)
+            summary_path = getattr(self.summarizers[agent_id], "prompt_path", None)
+            specs[agent_id] = {"instructions": instructions, "inference": agent.inference_config,
+                              "model": getattr(settings, "model_id", ""),
+                              "region": getattr(settings, "region", ""),
+                              "policy": asdict(self.policies[agent_id]),
+                              "summary_prompt": summary_path.read_text(encoding="utf-8") if summary_path else ""}
+        return specs
+
+    def run_contract(self, contract: ContractInput, *, job_id: str):
+        contract.validate()
+        if not isinstance(job_id, str) or not job_id.strip():
+            raise ValueError("job_id is required for cache isolation/resume")
+        if "workflow" in contract.context:
+            raise ValueError("'workflow' is reserved for orchestration")
+        key = hashlib.sha256(canonical([job_id, contract.contract_id, contract.version]).encode()).hexdigest()
+        try:
+            with self.cache.job_lock(key):
+                with self.observer.attributes(session_id=key, tags=["contract-risk-management"],
+                                              trace_name="contract.workflow"), \
+                     self.observer.span("contract.workflow", kind="chain", trace_id=uuid4().hex,
+                                       metadata={"job_id": job_id, "contract_id": contract.contract_id,
+                                                 "version": contract.version, "chunk_count": len(contract.chunks)}) as root:
+                    root.summary(input={"chunk_count": len(contract.chunks),
+                                        "total_characters": sum(len(c.text) for c in contract.chunks)})
+                    self.cache.begin(key, contract.fingerprint(self._execution()))
+                    completed = self.cache.get(key, "complete")
+                    if completed is not None:
+                        root.summary(output={"status": "completed", "cache_hit": True,
+                                             "chunk_count": len(contract.chunks)})
+                        return completed
+                    state = self.graph.invoke(
+                        {"cache_key": key, "contract": asdict(contract), "next_chunk": 0,
+                         "aggregate": {}, "results": {}},
+                        {"configurable": {"thread_id": key}, "recursion_limit": len(contract.chunks) + 10})
+                    result = {"job_id": job_id, "contract_id": contract.contract_id,
+                              "version": contract.version, "cache_key": key, "status": "completed",
+                              "results": state["results"]}
+                    self.cache.put(key, "complete", result)
+                    root.summary(output={"status": "completed", "cache_hit": False,
+                                         "chunk_count": len(contract.chunks), "agent_count": len(state["results"])})
+                    return result
+        finally:
+            self.observer.flush()
 
     def run(self, content: str, context: dict | None = None) -> dict:
-        context = {} if context is None else context
-        AgentRequest(content, context).validate()
-        results = {}
-        for agent_id in self.agent_order:
-            request = AgentRequest(content, deepcopy(context), deepcopy(results))
-            results[agent_id] = asdict(self.agents[agent_id].run(request))
-        return results
+        contract = ContractInput("inline", "1", [ContractChunk("chunk-0", 0, content)], 1,
+                                 {} if context is None else context)
+        return self.run_contract(contract, job_id=str(uuid4()))["results"]
