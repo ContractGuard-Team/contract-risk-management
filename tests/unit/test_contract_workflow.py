@@ -1,19 +1,17 @@
-from contextlib import contextmanager
 from dataclasses import asdict
+import hashlib
 import json
-import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
-from unittest.mock import patch
 
 from common.exceptions import ConfigurationError
-from common.schemas.contract import ContractChunk, ContractInput
+from common.schemas.contract import ContractChunk, ContractInput, canonical
 from common.schemas.agent_messages import ModelResult
-from hermes_integration.context_budget import ContextBudgetExceeded, MemoryPolicy, conservative_token_count
-from hermes_integration.context_engine import ContractContextEngine, ContextEngine
-from hermes_integration.summarizer import ModelMemorySummarizer
-from monitoring.langfuse import LangfuseObserver, NullObserver
+from agents.hermes.context_budget import ContextBudgetExceeded, MemoryPolicy, conservative_token_count
+from agents.hermes.context_engine import ContractContextEngine, ContextEngine
+from agents.hermes.summarizer import ModelMemorySummarizer
+from monitoring.observer import NullObserver
 from orchestration.cache import ContractCache
 from orchestration.pipeline import ContractRiskPipeline
 from orchestration.result_aggregator import aggregate_contract
@@ -30,7 +28,7 @@ class RecordingProvider:
         self.calls.append(messages)
         if body["content"] == self.fail_content:
             raise RuntimeError("simulated model failure")
-        return ModelResult("result:" + body["content"], {"inputTokens": 20, "outputTokens": 5}, "end_turn")
+        return ModelResult("result:" + body["content"], {"prompt_tokens": 20, "completion_tokens": 5}, "stop")
 
 
 class SummaryStub:
@@ -40,6 +38,10 @@ class SummaryStub:
     def summarize(self, text, target_tokens, input_budget):
         self.sources.append(text)
         return "memory: Acme; cross-reference chunk-0; source retained in cache"
+
+
+def run_key(job_id, contract_id="contract-a", version="v1"):
+    return hashlib.sha256(canonical([job_id, contract_id, version]).encode()).hexdigest()
 
 
 def contract(count=3, contract_id="contract-a"):
@@ -57,6 +59,22 @@ def pipeline(agents, *, cache=None, budget=100000, summarizer=None, observer=Non
 
 
 class WorkflowTests(unittest.TestCase):
+
+
+    def test_workflow_accepts_prepared_manifest_without_preprocessing_entrypoint(self):
+        provider = RecordingProvider()
+        with configured_agents(provider) as agents:
+            flow = pipeline(agents)
+            try:
+                self.assertFalse(hasattr(flow, "run_preprocessing_job"))
+                result = flow.run_contract(contract(2), job_id="prepared")
+                self.assertEqual(result["status"], "completed")
+                self.assertEqual(len(provider.calls), 4)
+                first = json.loads(provider.calls[0][-1]["content"])
+                self.assertEqual(first["context"]["workflow"]["source_metadata"], {"page": 1})
+            finally:
+                flow.cache.close()
+
     def test_hermes_engine_implements_real_extension_contract(self):
         memory = ContractContextEngine(MemoryPolicy(2000, 200), SummaryStub())
         self.assertIsInstance(memory, ContextEngine)
@@ -80,9 +98,16 @@ class WorkflowTests(unittest.TestCase):
             for c in contract().chunks:
                 saved = flow.cache.get(result["cache_key"], "classification", c.chunk_id)
                 self.assertEqual(saved["result"]["text"], "result:" + c.text)
-                self.assertTrue(saved["memory"]["turns"])
-            self.assertTrue(flow.cache.get(result["cache_key"], "agent_2_risk_scoring")["memory"]["turns"])
-            self.assertTrue(flow.cache.get(result["cache_key"], "agent_3_recommendation")["memory"]["turns"])
+                self.assertEqual(saved["scope"], {"contract_id": "contract-a", "version": "v1",
+                                                  "chunk_id": c.chunk_id, "chunk_index": c.index})
+                self.assertNotIn("memory", saved)  # released once the aggregate was confirmed
+            # Chunk 2 saw both earlier chunks of the same contract through Agent 1 memory.
+            self.assertIn("result:clause-0", json.dumps(provider.calls[2]))
+            self.assertIn("result:clause-1", json.dumps(provider.calls[2]))
+            for stage in ("agent_2_risk_scoring", "agent_3_recommendation"):
+                saved = flow.cache.get(result["cache_key"], stage)
+                self.assertTrue(saved["result"]["text"])
+                self.assertNotIn("memory", saved)  # released after the final result was stored
 
     def test_more_than_default_graph_limit_and_bounded_context(self):
         provider, summary = RecordingProvider(), SummaryStub()
@@ -108,6 +133,10 @@ class WorkflowTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 first.run_contract(contract(), job_id="resume")
             self.assertEqual(len(provider.calls), 2)
+            key = run_key("resume")
+            # Contract not finished: Agent 1 memory of processed chunks must stay for resume.
+            self.assertTrue(first.cache.get(key, "classification", "chunk-0")["memory"]["turns"])
+            self.assertIsNone(first.cache.get(key, "aggregate"))
             first.cache.close()
             provider.fail_content = None
             second = pipeline(agents, cache=ContractCache(path))
@@ -120,6 +149,33 @@ class WorkflowTests(unittest.TestCase):
             self.assertEqual(len(provider.calls), count)
             second.cache.close()
 
+    def test_agent_1_rejects_memory_from_another_contract(self):
+        provider = RecordingProvider()
+        provider.fail_content = contract(2).chunks[1].text
+        with configured_agents(provider) as agents:
+            flow = pipeline(agents)
+            with self.assertRaises(RuntimeError):
+                flow.run_contract(contract(2), job_id="mixed")
+            key = run_key("mixed")
+            row = flow.cache.get(key, "classification", "chunk-0")
+            row["scope"]["contract_id"] = "contract-b"  # memory/result now claims another contract
+            with flow.cache._db:
+                flow.cache._db.execute("UPDATE entries SET value=? WHERE run_key=? AND stage='classification' AND item_key='chunk-0'",
+                                       (json.dumps(row), key))
+            provider.fail_content, calls = None, len(provider.calls)
+            with self.assertRaises(ValueError):
+                flow.run_contract(contract(2), job_id="mixed")
+            self.assertEqual(len(provider.calls), calls)  # stopped before any model call
+            flow.cache.close()
+
+    def test_release_memory_is_idempotent_and_keeps_results(self):
+        cache = ContractCache()
+        cache.put("k", "classification", {"scope": {}, "result": {"text": "r"}, "memory": {"turns": [1]}}, "c0")
+        cache.release_memory("k", "classification")
+        cache.release_memory("k", "classification")
+        self.assertEqual(cache.get("k", "classification", "c0"), {"scope": {}, "result": {"text": "r"}})
+        cache.close()
+
     def test_cache_rejects_changed_input_and_changed_prompts(self):
         provider = RecordingProvider()
         with configured_agents(provider) as agents:
@@ -129,7 +185,7 @@ class WorkflowTests(unittest.TestCase):
             changed.context["new"] = "different input"
             with self.assertRaises(ValueError):
                 flow.run_contract(changed, job_id="same")
-            (agents["agent_1_classification"].directory / "soul.md").write_text("changed", encoding="utf-8")
+            (agents["agent_1_classification"].directory / "prompts/core.md").write_text("changed", encoding="utf-8")
             with self.assertRaises(ValueError):
                 flow.run_contract(contract(1), job_id="same")
 
@@ -176,13 +232,13 @@ class SummarizerTests(unittest.TestCase):
 
             def generate(self, messages, **kwargs):
                 self.calls.append(messages)
-                return ModelResult("short summary", {}, "end_turn")
+                return ModelResult("short summary", {}, "stop")
 
         with TemporaryDirectory() as directory:
             path = Path(directory) / "prompt.md"
             path.write_text("Test summary instruction", encoding="utf-8")
             provider = SummaryProvider()
-            summarizer = ModelMemorySummarizer(provider, prompt_path=path)
+            summarizer = ModelMemorySummarizer(provider, path)
             source = "SOURCE-" * 500
             self.assertEqual(summarizer.summarize(source, 30, 500), "short summary")
             self.assertTrue(all(conservative_token_count(m) <= 500 for m in provider.calls))
@@ -192,76 +248,8 @@ class SummarizerTests(unittest.TestCase):
     def test_missing_summary_prompt_never_calls_provider(self):
         provider = RecordingProvider()
         with self.assertRaises(ConfigurationError):
-            ModelMemorySummarizer(provider).summarize("history", 20, 1000)
+            ModelMemorySummarizer(provider, Path("agents/agent_1_classification/memory/short_term_summary.md")).summarize("history", 20, 1000)
         self.assertEqual(provider.calls, [])
-
-
-class FakeObservation:
-    def __init__(self, events):
-        self.events = events
-
-    def update(self, **kwargs):
-        self.events.append(("update", kwargs))
-
-
-class FakeLangfuse:
-    def __init__(self):
-        self.events = []
-
-    @contextmanager
-    def start_as_current_observation(self, **kwargs):
-        self.events.append(("start", kwargs))
-        yield FakeObservation(self.events)
-        self.events.append(("end", kwargs["name"]))
-
-    def flush(self):
-        self.events.append(("flush", None))
-
-
-class ObservabilityTests(unittest.TestCase):
-    def test_langfuse_contract_chunk_agent_usage_and_error_spans(self):
-        client, provider = FakeLangfuse(), RecordingProvider()
-        with configured_agents(provider) as agents:
-            pipeline(agents, observer=LangfuseObserver(client)).run_contract(contract(2), job_id="traced")
-        starts = [value for event, value in client.events if event == "start"]
-        self.assertEqual(starts[0]["name"], "contract.workflow")
-        self.assertEqual(len(starts[0]["trace_context"]["trace_id"]), 32)
-        self.assertEqual(sum(s["name"] == "agent_1_classification.chunk" and s["as_type"] == "agent"
-                             for s in starts), 2)
-        updates = [v for e, v in client.events if e == "update"]
-        self.assertTrue(any(v.get("usage_details") == {"input": 20, "output": 5} for v in updates))
-        self.assertEqual(updates[0]["input"]["chunk_count"], 2)
-        self.assertNotIn("clause-0", json.dumps(updates))
-        self.assertEqual(client.events[-1][0], "flush")
-
-    def test_tracing_failure_does_not_hide_application_error_or_repeat_work(self):
-        client = FakeLangfuse()
-        observer = LangfuseObserver(client)
-        with self.assertRaisesRegex(RuntimeError, "business failure"):
-            with observer.span("test"):
-                raise RuntimeError("business failure")
-        self.assertTrue(any(v.get("level") == "ERROR" for e, v in client.events if e == "update"))
-        with patch.object(client, "start_as_current_observation", side_effect=RuntimeError("down")):
-            with self.assertLogs("monitoring.langfuse", level="WARNING"):
-                with observer.span("test"):
-                    pass
-
-    def test_disabled_by_default_and_requires_explicit_connection(self):
-        with patch.dict(os.environ, {}, clear=True):
-            self.assertIsInstance(LangfuseObserver.from_env(env_file=None), NullObserver)
-            os.environ["LANGFUSE_ENABLED"] = "true"
-            with self.assertRaises(ConfigurationError):
-                LangfuseObserver.from_env(env_file=None)
-
-    def test_installed_langfuse_sdk_offline_context_manager(self):
-        from langfuse import Langfuse
-        client = Langfuse(public_key="pk-lf-offline-test", secret_key="sk-lf-offline-test",
-                          tracing_enabled=False)
-        observer = LangfuseObserver(client)
-        with observer.span("offline-sdk", kind="generation", trace_id="1" * 32, model="test") as span:
-            span.update(usage_details={"input": 1, "output": 2})
-        observer.flush()
-        client.shutdown()
 
 
 if __name__ == "__main__":

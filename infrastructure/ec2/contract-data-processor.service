@@ -1,0 +1,26 @@
+[Unit]
+Description=Contract risk legal Data Router + Processing (retries failed ingest_jobs from the web + daily refresh)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=@USER@
+WorkingDirectory=@APP_DIR@
+# Single project env file (root .env); empty secrets are read from Secrets Manager (API_KEYS_SECRET_ID).
+Environment=PYTHONPATH=@APP_DIR@ DATA_PIPELINE_ENV_FILE=@APP_DIR@/.env PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
+ExecStart=@VENV@/bin/python -m data_pipeline processor
+# Writable cache for the local embedding model (EMBEDDING_CACHE_DIR=/var/lib/contract-risk/models), kept across restarts.
+StateDirectory=contract-risk/models
+Restart=on-failure
+RestartSec=30
+# The job in progress is reset to pending on the next start.
+TimeoutStopSec=300
+Nice=10
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

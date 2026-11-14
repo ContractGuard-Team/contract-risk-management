@@ -1,0 +1,48 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "CollectorConsumesScheduleQueue",
+      "Effect": "Allow",
+      "Action": [
+        "sqs:ReceiveMessage",
+        "sqs:DeleteMessage",
+        "sqs:ChangeMessageVisibility",
+        "sqs:GetQueueAttributes"
+      ],
+      "Resource": "arn:aws:sqs:ap-southeast-1:333596350642:contract-data-update-queue"
+    },
+    {
+      "Sid": "ListLegalPrefix",
+      "Effect": "Allow",
+      "Action": [
+        "s3:ListBucket"
+      ],
+      "Resource": "arn:aws:s3:::contract-risk-database-unique-333596350642-ap-southeast-1-an",
+      "Condition": {
+        "StringLike": {
+          "s3:prefix": [
+            "legal/*"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "ReadWriteLegalObjects",
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetObject",
+        "s3:PutObject"
+      ],
+      "Resource": "arn:aws:s3:::contract-risk-database-unique-333596350642-ap-southeast-1-an/legal/*"
+    },
+    {
+      "Sid": "ReadProjectApiKeys",
+      "Effect": "Allow",
+      "Action": [
+        "secretsmanager:GetSecretValue"
+      ],
+      "Resource": "arn:aws:secretsmanager:ap-southeast-1:333596350642:secret:contract-risk/prod/api-keys-*"
+    }
+  ]
+}

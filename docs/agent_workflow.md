@@ -1,6 +1,13 @@
-# LangGraph, Hermes memory và Langfuse
+# LangGraph, Hermes memory và tiến độ workflow
 
 ## Luồng thực thi
+
+Trong Compose, worker gửi ContractInput do processing service chuẩn hóa tới LangGraph.
+Graph gọi RemoteAgent/RemoteSummarizer qua HTTP; node/cạnh, handoff, cache và memory
+vẫn giữ nguyên. RPC trả AgentResult và memory snapshot. Full-result/memory cache nằm
+trên volume để phục hồi, còn job HTTP có durable queue/lease. Không cần Docker Engine.
+Caller Python vẫn có thể cung cấp ContractInput trực tiếp cho run_contract/run;
+không khôi phục run_preprocessing_job trong orchestration.
 
 ```mermaid
 flowchart LR
@@ -31,16 +38,18 @@ Mỗi plan giữ điểm thiếu, nguồn và liên kết điều khoản; hết
 [mô hình tool của MCP](https://modelcontextprotocol.io/docs/learn/server-concepts).
 
 Các plan mô tả hành vi mục tiêu. Runtime hiện chưa triển khai MCP client, vòng lặp
-tool, cache tiến độ/bằng chứng từng mục, schema nghiệp vụ hay dọn snapshot/checkpoint.
+tool, cache tiến độ/bằng chứng từng mục, schema nghiệp vụ hay dọn snapshot Agent 2/3 và
+checkpoint toàn job. Dọn memory Agent 1 sau aggregate đã triển khai (xem [agent_1_flow.md](agent_1_flow.md)).
 Nạp `plan.md` vào instructions không tự tạo các chức năng đó. Endpoint, binding MCP,
 credential, ngân sách tìm kiếm và quy tắc riêng vẫn cần được cấu hình sau.
 
-`hermes_integration/context_engine.py` triển khai lớp con của
+`agents/hermes/context_engine.py` triển khai lớp con của
 `agent.context_engine.ContextEngine` trong source Hermes thật. Lớp tích hợp gọi
-engine trực tiếp quanh lần gọi Bedrock của BaseAgent; không khởi động Hermes CLI,
+engine trực tiếp quanh lần gọi model (OpenAI) của BaseAgent; không khởi động Hermes CLI,
 AIAgent tool loop hoặc bộ nhớ người dùng toàn cục.
 
-- Agent 1: trước chunk tiếp theo, khôi phục snapshot từ chunk trước đã lưu thành công.
+- Agent 1: trước chunk tiếp theo, khôi phục snapshot từ chunk trước đã lưu thành công;
+  snapshot phải có `scope` đúng contract/version/chunk N−1, sai thì dừng trước khi gọi model.
   Context gồm system instructions, summary cũ nếu có, các turn gần nhất và chunk hiện tại.
 - Agent 2: memory riêng, đầu vào là aggregate classification của toàn bộ hợp đồng.
 - Agent 3: memory riêng, đầu vào là output Agent 2.
@@ -63,8 +72,8 @@ giữ các turn gần nhất nếu vừa ngân sách. Summary tiếp tục đư�
 Nếu cần, cả turn gần nhất cũng có thể được tóm tắt để dành chỗ cho chunk mới.
 System instructions và chunk đang xử lý không bị cắt bỏ.
 
-Prompt nén nằm ở `agents/shared/prompts/compact_memory.md`, hiện chỉ có TODO.
-Model tóm tắt dùng cùng Bedrock provider của agent nhận context. Input quá lớn được
+Prompt nén (short term) nằm ở `agents/shared/prompts/short_term_summary.md`, đang để trống. Xem `docs/agent_core.md`.
+Model tóm tắt dùng cùng OpenAI provider của agent nhận context. Input quá lớn được
 chia thành phần vừa ngân sách rồi tóm tắt nhiều tầng; mọi phần được đưa vào bước xử lý.
 Summary không thu nhỏ, không hoàn chỉnh hoặc chunk hiện tại vẫn quá lớn sẽ gây lỗi
 rõ ràng, không đánh dấu hợp đồng hoàn tất.
@@ -86,45 +95,41 @@ cache trong vòng suy luận ở phiên bản này.
 - Fingerprint bao gồm toàn bộ chunk/context, model, ngân sách, prompt và cấu hình inference.
   Không dùng lại job với input/cấu hình khác. Thay đổi code, tokenizer, handler hoặc
   summarizer tùy biến cần đổi `cache_revision` hoặc job ID.
-- Lỗi ở chunk N: gọi lại `run_contract` với cùng input/job/cache; các chunk đã lưu được
-  bỏ qua, snapshot trước N được khôi phục. Agent 2/3 đã lưu cũng được dùng lại.
-- LangGraph dùng InMemorySaver theo thread_id mặc định. Có thể inject checkpointer
-  bền vững sau; cache SQLite vẫn cho phép phục hồi qua lần khởi động process mới bằng
-  cách chạy lại graph và dùng các kết quả đã lưu.
+- Resume (`orchestration/checkpoint.py`): `resume_chunk` tìm chunk đầu tiên chưa có kết quả trong
+  cache. Graph vào thẳng chunk đó; nếu Agent 1 đã đủ chunk thì vào thẳng aggregate → Agent 2.
+  Agent 2/3 đã lưu được dùng lại. Cache SQLite là nguồn tiến độ bền vững duy nhất.
+- InMemorySaver chỉ là state tạm của một lần chạy: `forget` xóa thread sau mỗi lần invoke (kể cả
+  lỗi) để service langgraph không giữ toàn bộ hợp đồng trong RAM mãi mãi.
+- Sau khi lưu `complete`: `release_run` xóa memory snapshot Agent 2/3 (giữ result/input_context).
+  Memory Agent 1 đã được xóa ngay sau aggregate (xem [agent_1_flow.md](agent_1_flow.md)).
 - Khóa chống chạy trùng hiện nằm trong một instance ContractCache. Thiết kế này dành
   cho một process/worker; nhiều process/máy cần distributed lock và backend cache chung.
 - Nếu process chết sau model trả lời nhưng trước khi commit cache, lần gọi đó có thể
   phải thực hiện lại. Chưa có đảm bảo exactly-once cho API model.
-- Chưa tự động retry workflow; lỗi được đẩy lên caller. Đóng cache bằng `cache.close()`
-  khi kết thúc sử dụng. Cần chính sách dọn cache/checkpoint khi vận hành lâu dài.
 
-## Langfuse
+## Retry nghiệp vụ (`orchestration/retry_policy.py`)
 
-Adapter trong `monitoring/langfuse.py` dùng Python SDK 5.1.x, được khai báo `>=5.1,<6`.
-Điền `.env` tại root hoặc export các biến sau để bật (biến môi trường được ưu tiên):
+| Tầng | Retry | Điều kiện |
+| --- | --- | --- |
+| SDK `openai` | 2 lần (max_retries=2), timeout 120 s | SDK tự xử lý 408/409/429/5xx/kết nối |
+| `OpenAIChatClient` | không retry, phân loại | RateLimit (trừ `insufficient_quota`), InternalServer 5xx, APIConnection/Timeout → `TransientModelError`; Authentication/BadRequest/hết quota giữ nguyên lỗi; `finish_reason` khác `stop` → `ModelResponseError` |
+| `ServiceClient` HTTP | 3 lần, 0.2–0.4s | 429/5xx/transport |
+| `JobStore.submit` | cho submit lại tối đa 3 attempt | error_type thuộc `RETRYABLE_JOB_ERRORS` (RemoteServiceError, TimeoutError, TransientModelError) |
+| Node LangGraph classify/evaluate/recommend | `AGENT_STAGE_RETRY`: 3 lần, backoff 5s→60s, jitter | `is_transient`: dịch vụ không phản hồi hoặc job agent lỗi tạm thời |
 
-```text
-LANGFUSE_ENABLED=true
-LANGFUSE_PUBLIC_KEY=<TODO>
-LANGFUSE_SECRET_KEY=<TODO>
-LANGFUSE_BASE_URL=<TODO>
-```
+Lỗi validate/cấu hình/output model (ModelResponseError, ConfigurationError, ValueError...) không retry.
+Trước đây (thời Bedrock) throttling sau 3 lần SDK làm job agent lỗi `ClientError` vĩnh viễn (job không được
+requeue); giờ được retry có backoff. Chưa có chính sách xóa cache/volume theo thời gian (retention).
 
-Mặc định tắt hoàn toàn khi chưa bật LANGFUSE_ENABLED. Khi bật nhưng thiếu kết nối,
-code báo ConfigurationError thay vì tự chọn một endpoint.
+## Theo dõi tiến độ nội bộ
 
-Mỗi lần chạy có trace ID mới; session ID ổn định theo job/contract/version liên kết các
-lần tiếp tục. Root là `chain`, bước xử lý của ba agent là `agent`, từng lần gọi model
-và tóm tắt memory là `generation`. Ghi model ID, latency, input/output/cache token usage,
-cache hit và loại lỗi. Tool được gọi với observer tạo observation kiểu `tool`.
+`monitoring/observer.py` cung cấp giao diện callback mặc định không làm I/O.
+`monitoring/worker_observer.py` giữ adapter sự kiện để dùng khi cấu hình transport
+sau này; hiện không tự gắn vào worker hoặc pipeline. Mặc định graph chạy với
+NullObserver, không gửi progress/output ra ngoài. Các sự kiện phải được caller
+nối tường minh trong một bước triển khai tiếp theo.
+Xem [worker, ACK và cấu hình EC2](workers.md).
 
-Mặc định chỉ ghi metadata, usage và thống kê input/output, không gửi prompt hoặc nội dung hợp đồng. Đặt
-`LANGFUSE_CAPTURE_CONTENT=true` nếu muốn ghi input/output. Lỗi trong thao tác ghi trace
-được log và không thay thế lỗi nghiệp vụ hoặc làm gọi lại model. Flush sau mỗi lần
-chạy. Đã xác minh đường đi đầy đủ bằng dữ liệu giả lập và đọc lại trace từ Langfuse Cloud;
-Bedrock vẫn dùng client giả trong lần xác minh này. Xem [hướng dẫn Langfuse](langfuse.md).
-
-API đối chiếu: [LangGraph persistence](https://docs.langchain.com/oss/python/langgraph/persistence),
-[Langfuse instrumentation](https://langfuse.com/docs/observability/sdk/instrumentation),
-[Langfuse best practices](https://langfuse.com/docs/observability/best-practices).
+Usage do OpenAI trả về (`prompt_tokens`, `completion_tokens`, ...) vẫn giữ trong kết quả và cache. Gỡ telemetry không thay đổi
+memory, token budget, prompt, model provider hay logic LangGraph.
 Giao diện ContextEngine được đối chiếu trực tiếp với source Hermes trong repo.

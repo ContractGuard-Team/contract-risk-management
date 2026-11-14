@@ -1,5 +1,5 @@
 from common.schemas.agent_messages import AgentRequest
-from hermes_integration.agent_factory import create_agent as _create_agent
+from agents.hermes.agent_factory import create_agent as _create_agent
 
 
 def create_agent(*, settings=None, provider=None, tools=None):

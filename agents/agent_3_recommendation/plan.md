@@ -33,8 +33,8 @@ memory khi runtime chưa thực hiện và trả kết quả xác nhận.
 
 ## 2. Xử lý theo prompt và bổ sung bằng chứng qua MCP
 
-Thực hiện theo `prompts/system.md`, `prompts/recommend.md`, soul, constraints
-và context instructions đã cấu hình. Đề xuất phải liên kết với rủi ro/điều khoản
+Thực hiện theo `prompts/core.md` (xử lý trung tâm), `prompts/external.md` (xử lý ngoài luồng) và `prompts/examples/`
+và bài học long-term memory đã duyệt. Đề xuất phải liên kết với rủi ro/điều khoản
 đang xử lý; không tự thay đổi kết quả Agent 2 hoặc quyết định chấp nhận rủi ro.
 
 ### 2.1. Truy xuất database trước

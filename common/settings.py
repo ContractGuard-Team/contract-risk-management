@@ -1,29 +1,24 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import os
 
 from common.exceptions import ConfigurationError
 
 
 @dataclass(frozen=True)
-class BedrockSettings:
-    region: str = ""
-    model_id: str = ""
-    profile: str = ""
+class OpenAISettings:
+    model: str = ""
+    api_key: str = field(default="", repr=False)  # never logged, hashed or returned (see public())
 
     @classmethod
     def from_env(cls, prefix: str = ""):
-        def value(name, fallback):
-            return (os.getenv(f"{prefix}_{name}", "") if prefix else "").strip() or os.getenv(fallback, "").strip()
-
-        return cls(value("REGION", "AWS_REGION"),
-                   value("MODEL_ID", "BEDROCK_MODEL_ID"),
-                   value("PROFILE", "AWS_PROFILE"))
+        agent_model = os.getenv(f"{prefix}_MODEL", "").strip() if prefix else ""
+        return cls(agent_model or os.getenv("OPENAI_MODEL", "").strip(), os.getenv("OPENAI_API_KEY", "").strip())
 
     def validate(self):
-        missing = [name for name, value in
-                   (("region", self.region), ("model_id", self.model_id))
+        missing = [name for name, value in (("OPENAI_MODEL", self.model), ("OPENAI_API_KEY", self.api_key))
                    if not isinstance(value, str) or not value.strip()]
         if missing:
-            raise ConfigurationError("TODO: configure Bedrock " + ", ".join(missing))
-        if not isinstance(self.profile, str):
-            raise ConfigurationError("Bedrock profile must be a string")
+            raise ConfigurationError("TODO: configure OpenAI " + ", ".join(missing))
+
+    def public(self):
+        return {"model": self.model}

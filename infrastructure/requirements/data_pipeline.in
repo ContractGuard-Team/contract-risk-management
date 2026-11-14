@@ -1,0 +1,7 @@
+-r processing.in
+# Data Recollector + Router/Processing (EC2 venv, not Docker): crawl, parse, store, embed
+beautifulsoup4>=4.12,<5
+lxml>=5,<7
+supabase>=2.20,<3
+qdrant-client>=1.15,<2
+fastembed>=0.9,<1

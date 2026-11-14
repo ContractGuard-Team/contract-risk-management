@@ -1,0 +1,135 @@
+{
+  "config": {
+    "INTERNAL_API_TOKEN": {
+      "provider": "secretsmanager",
+      "id_env": "API_KEYS_SECRET_ID",
+      "json_key": "INTERNAL_API_TOKEN"
+    }
+  },
+  "worker": {
+    "INTERNAL_API_TOKEN": {
+      "provider": "secretsmanager",
+      "id_env": "API_KEYS_SECRET_ID",
+      "json_key": "INTERNAL_API_TOKEN"
+    }
+  },
+  "input-processing": {
+    "INTERNAL_API_TOKEN": {
+      "provider": "secretsmanager",
+      "id_env": "API_KEYS_SECRET_ID",
+      "json_key": "INTERNAL_API_TOKEN"
+    }
+  },
+  "agent-1": {
+    "INTERNAL_API_TOKEN": {
+      "provider": "secretsmanager",
+      "id_env": "API_KEYS_SECRET_ID",
+      "json_key": "INTERNAL_API_TOKEN"
+    },
+    "OPENAI_API_KEY": {
+      "provider": "secretsmanager",
+      "id_env": "API_KEYS_SECRET_ID",
+      "json_key": "OPENAI_API_KEY"
+    }
+  },
+  "agent-2": {
+    "INTERNAL_API_TOKEN": {
+      "provider": "secretsmanager",
+      "id_env": "API_KEYS_SECRET_ID",
+      "json_key": "INTERNAL_API_TOKEN"
+    },
+    "OPENAI_API_KEY": {
+      "provider": "secretsmanager",
+      "id_env": "API_KEYS_SECRET_ID",
+      "json_key": "OPENAI_API_KEY"
+    },
+    "MCP_API_TOKEN": {
+      "provider": "secretsmanager",
+      "id_env": "API_KEYS_SECRET_ID",
+      "json_key": "MCP_API_TOKEN"
+    }
+  },
+  "agent-3": {
+    "INTERNAL_API_TOKEN": {
+      "provider": "secretsmanager",
+      "id_env": "API_KEYS_SECRET_ID",
+      "json_key": "INTERNAL_API_TOKEN"
+    },
+    "OPENAI_API_KEY": {
+      "provider": "secretsmanager",
+      "id_env": "API_KEYS_SECRET_ID",
+      "json_key": "OPENAI_API_KEY"
+    },
+    "MCP_API_TOKEN": {
+      "provider": "secretsmanager",
+      "id_env": "API_KEYS_SECRET_ID",
+      "json_key": "MCP_API_TOKEN"
+    }
+  },
+  "langgraph": {
+    "INTERNAL_API_TOKEN": {
+      "provider": "secretsmanager",
+      "id_env": "API_KEYS_SECRET_ID",
+      "json_key": "INTERNAL_API_TOKEN"
+    }
+  },
+  "monitoring": {
+    "INTERNAL_API_TOKEN": {
+      "provider": "secretsmanager",
+      "id_env": "API_KEYS_SECRET_ID",
+      "json_key": "INTERNAL_API_TOKEN"
+    },
+    "LANGFUSE_PUBLIC_KEY": {
+      "provider": "secretsmanager",
+      "id_env": "API_KEYS_SECRET_ID",
+      "json_key": "LANGFUSE_PUBLIC_KEY"
+    },
+    "LANGFUSE_SECRET_KEY": {
+      "provider": "secretsmanager",
+      "id_env": "API_KEYS_SECRET_ID",
+      "json_key": "LANGFUSE_SECRET_KEY"
+    }
+  },
+  "mcp": {
+    "INTERNAL_API_TOKEN": {
+      "provider": "secretsmanager",
+      "id_env": "API_KEYS_SECRET_ID",
+      "json_key": "INTERNAL_API_TOKEN"
+    },
+    "MCP_API_TOKEN": {
+      "provider": "secretsmanager",
+      "id_env": "API_KEYS_SECRET_ID",
+      "json_key": "MCP_API_TOKEN"
+    },
+    "TAVILY_API_KEY": {
+      "provider": "secretsmanager",
+      "id_env": "API_KEYS_SECRET_ID",
+      "json_key": "TAVILY_API_KEY"
+    },
+    "QDRANT_URL": {
+      "provider": "secretsmanager",
+      "id_env": "API_KEYS_SECRET_ID",
+      "json_key": "QDRANT_URL"
+    },
+    "QDRANT_API_KEY": {
+      "provider": "secretsmanager",
+      "id_env": "API_KEYS_SECRET_ID",
+      "json_key": "QDRANT_API_KEY"
+    },
+    "SUPABASE_URL": {
+      "provider": "secretsmanager",
+      "id_env": "API_KEYS_SECRET_ID",
+      "json_key": "SUPABASE_URL"
+    },
+    "SUPABASE_PUBLISHABLE_KEY": {
+      "provider": "secretsmanager",
+      "id_env": "API_KEYS_SECRET_ID",
+      "json_key": "SUPABASE_PUBLISHABLE_KEY"
+    },
+    "SUPABASE_SECRET_KEY": {
+      "provider": "secretsmanager",
+      "id_env": "API_KEYS_SECRET_ID",
+      "json_key": "SUPABASE_SECRET_KEY"
+    }
+  }
+}

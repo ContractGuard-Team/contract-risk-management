@@ -1,0 +1,5 @@
+-r base.in
+pypdf>=6,<7
+pypdfium2>=5,<6
+python-docx>=1.2,<2
+Pillow>=12,<13

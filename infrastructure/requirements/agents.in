@@ -1,0 +1,6 @@
+-r base.in
+langgraph>=1.2.19,<2
+# Model provider of the three agents (Chat Completions)
+openai>=2,<3
+# MCP client used by Agent 2/3 to call the mcp service
+mcp>=1.30,<2

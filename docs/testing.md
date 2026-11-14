@@ -1,50 +1,139 @@
-# Kiểm thử ba agent, workflow và memory
+# Kiểm thử hệ thống multi-container
 
-Chạy tại root repository bằng Python >=3.11,<3.15 với dependency trong `pyproject.toml`:
+Kết quả ngày 2026-11-07 sau khi thực hiện `plan_work.txt`: **106/106 unit test,
+4/4 notebook, 8/8 image runtime build thành công và 8/8 service healthy**. Pipeline
+xuyên container đạt cả khi Agent 2 có hai replica. AWS dùng Moto và model dùng
+fixture tường minh; đây là nghiệm thu tích hợp local, không phải nghiệm thu AI/AWS thật.
+
+## Chạy unit test
+
+Tại root repository, Python >=3.11,<3.15; workspace dùng Python 3.12.16:
 
 ```sh
+python -m pip install -e ".[test]"
 python -B -m unittest discover -s tests/unit -p "test_*.py" -v
 ```
 
-`tests/unit/test_agent_base.py` kiểm tra luồng ba agent qua bộ chuyển đổi Hermes thật
-và Bedrock client giả, chuyển context/kết quả, cấu hình từng agent, prompt chưa điền,
-response lỗi/không hoàn chỉnh, dừng workflow khi lỗi, handler tool và memory theo job.
-Prompt thử nghiệm được tạo trong thư mục tạm; các file prompt của dự án vẫn là TODO.
+Windows dùng `.venv312/Scripts/python.exe`. Trong sandbox có thể cần quyền truy cập
+thư mục tạm cho Python/notebook. Test không yêu cầu tài khoản hoặc credential AWS thật.
 
-Không cần credential, không gọi AWS hoặc API ngoài. Bộ kiểm thử chưa xác minh IAM,
-quyền truy cập model, chất lượng phân tích hợp đồng, HTTP/container hoặc hệ thống end-to-end.
-Các notebook hiện vẫn là khung để triển khai kiểm thử sau.
+| Bộ test | Phạm vi |
+| --- | --- |
+| test_agent_base.py | BaseAgent, client OpenAI giả (request Chat Completions), context, prompt/config validation, tools, memory riêng từng job |
+| test_contract_workflow.py | LangGraph và Hermes ContextEngine thật, 40 chunk, tổng hợp/handoff Agent 1 → 2 → 3, budget/summary, cache/resume, thay input/prompt và cô lập hợp đồng |
+| test_input_processing.py | Validation, normalize, cấu trúc, chunk/budget/overlap, provenance, manifest và CLI |
+| test_file_processing.py | PDF/DOCX/TXT/ảnh, bảng/numbering/note, render, metadata, S3 version/stream, giới hạn và lỗi OCR |
+| test_observer.py | Callback/usage nội bộ, lọc raw content, không báo completed sai khi lỗi |
+| test_workers.py | Moto SQS/S3/DynamoDB, runtime/lease/heartbeat/hash, S3-before-completed/ACK/DeleteMessage, retry, timeout, negative ACK; progress process spawn thật |
+| test_worker_connectors.py | Giao thức multipart và Langfuse reader cũ được giữ cho caller library; auth, phân trang, identity, sequence, giới hạn response/lỗi |
+| test_component_boundaries.py | Worker không import agent/preprocessing/orchestration; dùng common/config/monitoring để gọi API nội bộ |
+| test_service_architecture.py | 12 test mới: HTTP auth/identity, provenance, job idempotency/lease/recovery/fencing/retry, agent RPC/memory/revision, fixture chỉ local, Secrets Manager/SSM, phân quyền config và runtime bootstrap, telemetry redaction/dedup, Langfuse OTLP tùy chọn |
 
-`tests/unit/test_contract_workflow.py` chạy LangGraph và ContextEngine Hermes thật:
-kiểm tra 40 chunk vượt recursion limit mặc định, context nối tiếp, tổng hợp đủ chunk,
-handoff Agent 1 → 2 → 3, giới hạn request, summary nhiều tầng, lỗi/khôi phục từ SQLite,
-cache hit và xung đột input/prompt, cô lập hợp đồng, Langfuse lỗi/không cấu hình.
-Langfuse SDK thật được kiểm tra với tracing tắt; các kiểm tra event dùng client giả.
+Entrypoint worker mới không dùng reader Langfuse để hoàn tất job. Các test reader
+cũ là kiểm tra tương thích, không mô tả đường chạy Compose hiện tại.
 
-Môi trường workspace đã tạo: `.venv312/Scripts/python.exe` (Python 3.12).
-Lần xác minh ngày 2026-11-03 đạt 38/38 unit test.
-`tests/unit/test_langfuse_config.py` kiểm tra cấu hình `.env`/environment, che key/email
-ở lớp export OTel, token usage kể cả response không hoàn chỉnh, và trace/session khi chạy lại.
-Unit test không gọi Bedrock hoặc gửi trace tới server thật, kể cả khi `.env` local bật Langfuse.
-Trong sandbox Windows hiện tại, Python 3.12 bị từ chối ghi vào temporary directory;
-lần kiểm thử xác minh được chạy ngoài sandbox sau khi được cấp quyền.
+## Notebook Jupyter
 
-## Kiểm tra kết nối Langfuse thật
+Bốn notebook đã chạy bằng kernel `.venv312`, không cell lỗi:
+
+- `tests/unit/test_input_processing.ipynb`: xử lý text và assertion.
+- `tests/integration/test_file_processing.ipynb`: DOCX/ảnh mẫu, JSON/chunk/provenance.
+- `tests/integration/test_worker_job_lifecycle.ipynb`: vòng đời worker, AWS giả lập,
+  lỗi ghi kết quả, IPC và progress process.
+- `tests/integration/test_container_services.ipynb`: kiểm tra giao thức service,
+  secret/auth, memory và recovery bằng bộ test offline.
+
+Source notebook giữ output trống; bản có kết quả nằm trong
+`.cache/executed-notebooks/`, không commit. Notebook service không tự khởi động Docker;
+kiểm thử xuyên container thực tế chạy bằng script dưới đây. Các notebook agent riêng
+còn là khung; logic ba agent được kiểm tra trong unit test và E2E.
+
+## Docker và E2E
 
 ```sh
-python -B -m scripts.verify_langfuse
+python scripts/init_env.py  # Chỉ tạo nếu chưa có .env, không ghi đè cấu hình hiện tại.
+docker compose config --quiet
+docker compose build
+docker compose up -d --wait
+docker build --target test -t contract-risk/test:local -f infrastructure/docker/Dockerfile .
+docker run --rm --network contract-risk_backend --env-file .env contract-risk/test:local
 ```
 
-Script cần credential Langfuse đã cấu hình; chạy LangGraph, Hermes adapter và memory
-với bốn chunk giả lập, prompt tạm và Bedrock client giả. Chỉ gửi dữ liệu giả lập tới
-Langfuse, không gọi AWS. Có các lần nén memory để kiểm tra generation tương ứng.
-Trace mang tag `synthetic`/`smoke-test`, model `synthetic-bedrock-no-network`, metadata
-`usage_is_simulated=true`; số token thử nghiệm không phản ánh chi phí model thật.
-Script flush/shutdown và in URL trace; báo cáo lưu trong `.cache/langfuse-smoke-result.json`.
-Xem [cách đọc lại và kiểm tra trace](langfuse.md).
+Đổi network nếu đổi COMPOSE_PROJECT_NAME. E2E yêu cầu APP_ENV=local,
+MODEL_PROVIDER=fixture và Langfuse tắt. Script `tests/integration/container_smoke.py`
+khởi động Moto HTTP trong test container, tạo SQS/S3/DynamoDB giả, chạy entrypoint
+worker với supervisor/intake/progress thật, gọi các service Compose qua HTTP/DNS.
+Không cần Docker socket trong container.
 
-Lần smoke test ngày 2026-11-03 đã gửi và đọc lại bằng CLI chính thức: 18 observation,
-gồm sáu bước agent (bốn chunk Agent 1, Agent 2, Agent 3), mười generation giả lập
-(gồm nén memory), một aggregate và một root. Đã kiểm tra parent/type, input/output,
-model/usage, session, tags và environment.
-[Trace đã xác minh](https://cloud.langfuse.com/project/cmw0e1gby01m9ad0et1wb1m17/traces/76bfd6795c2a45d6b78e77c787338223).
+Đã xác minh:
+
+- Tám service ready; API yêu cầu token, config từ chối alias không được cấp quyền.
+- SQS → tải S3 → input-processing → LangGraph → Agent 1/2/3 → worker.
+- Tự tạo runtime_id, ghi output Agent 3 lên S3 và trạng thái DynamoDB trước ACK/xóa SQS.
+- Job gửi lại dùng cùng runtime/result; telemetry nối được job_id/trace_id/request_id
+  và có token usage của fixture; không xuất raw contract trong events.
+- Collector ghi nhận đủ tám service; chạy được khi không có Langfuse API key.
+- Worker hai process dừng bằng SIGTERM, exit code 0.
+- Scale riêng Agent 2 lên hai replica healthy; E2E tiếp tục đạt; đã trả về một replica.
+- Workflow result và cache/memory còn sau khi recreate container. Recovery lease và
+  chặn owner cũ được kiểm tra bằng unit test; chưa chaos-test mọi thời điểm crash.
+- Tesseract thật trong image input-processing có eng/vie; mẫu ảnh chữ tiếng Anh được
+  extract/chunk qua pipeline với vie+eng. Không dùng kết quả này để suy ra độ chính xác
+  OCR cho hợp đồng scan tiếng Việt thực tế.
+- Tám image Linux/amd64 chạy UID 10001, không có .env dưới /app; các giá trị token
+  runtime sinh bởi init_env không có trong image metadata. `pip check` đạt cho bốn
+  bộ dependency khác nhau: worker, processing, agents, langgraph.
+- Script EC2 được chuyển sang LF, có .gitattributes bảo toàn LF và qua `sh -n` trên Linux.
+
+Evidence local: `.cache/image-manifest.json`, `.cache/final-e2e.log`,
+`.cache/final-e2e-exit.txt` (0), `.cache/executed-notebooks/`. Không commit cache.
+
+## Giới hạn nghiệm thu
+
+Chưa gọi AWS/OpenAI/Langfuse thật, chưa provision tài nguyên hoặc deploy EC2.
+Prompt/model settings/memory budgets và schema/luật nghiệp vụ còn TODO theo thiết kế
+cũ; fixture không phân tích hoặc chấm điểm hợp đồng thật. HTTP JSON giữ AgentResult
+hiện có, không tự tạo quy tắc AI mới.
+
+SQLite volumes và scale được kiểm tra trên một Docker host; không hỗ trợ chia sẻ
+SQLite qua NFS/multi-host, không cam kết exactly-once model call. Secret được lấy lúc
+startup và cache ngắn phía broker; rotation cần restart client. Telemetry không chặn
+job khi collector mất kết nối; stdout là fallback, chưa có durable outbox ở client.
+
+Xem `docs/plan_work_report.md` cho danh sách bàn giao và `docs/deployment_ec2.md` cho
+các bước đưa cấu hình/model/IAM thật vào môi trường đích.
+
+## Kiểm chứng năm điểm bàn giao (2026-11-07)
+
+Lượt kiểm tra bổ sung chạy lại 44 unit test thuộc test_contract_workflow,
+test_service_architecture và test_file_processing, đều đạt. Hai E2E mới xác minh
+đủ năm điểm bàn giao bằng TXT tiếng Việt 3 chunk và PNG qua Tesseract thật 1 chunk.
+Audit so sánh bytes tải từ S3, manifest, metadata, memory/message model, aggregate
+Agent 1, context Agent 2/3 và JSON cuối worker lưu S3. AWS/model vẫn là Moto/fixture.
+
+`tests/integration/handoff_audit.py` chỉ đọc records của job kiểm thử vừa tạo từ
+SQLite volume; không bổ sung debug API hay log raw contract. Cách chạy bằng PowerShell
+tại root với Compose đang healthy và `.env` local fixture:
+
+```powershell
+docker build --target test -t contract-risk/test:local -f infrastructure/docker/Dockerfile .
+$handoffMounts = @()
+foreach ($service in @('input-processing', 'langgraph', 'agent-1', 'agent-2', 'agent-3')) {
+    $handoffMounts += '--mount'
+    $handoffMounts += "type=volume,source=contract-risk_${service}-data,target=/audit/${service},readonly"
+}
+foreach ($kind in @('txt', 'png')) {
+    docker run --rm --pull never --network contract-risk_backend --env-file .env `
+        -e SMOKE_AUDIT_DIR=/audit -e "SMOKE_INPUT_KIND=$kind" `
+        @handoffMounts contract-risk/test:local
+    if ($LASTEXITCODE -ne 0) { throw "Handoff verification failed: $kind" }
+}
+```
+
+Nếu đổi COMPOSE_PROJECT_NAME, đổi network và tiền tố volume tương ứng; các volume
+phải thuộc Compose hiện có. Chạy smoke không có SMOKE_AUDIT_DIR vẫn kiểm tra luồng
+chính, nhưng không đọc/đối chiếu nội dung tại từng điểm bàn giao.
+
+Evidence local: `.cache/handoff-text.log`, `.cache/handoff-ocr.log` và các file exit
+code cùng tên. Xem mục 10 của [báo cáo luồng](current_connections_report.md) để biết
+đường truyền chính xác và giới hạn của lần kiểm tra.

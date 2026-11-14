@@ -1,0 +1,26 @@
+[Unit]
+Description=Contract risk legal Data Recollector (SQS -> vanban.chinhphu.vn -> S3 originals + in-memory processing -> Supabase/Qdrant)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=@USER@
+WorkingDirectory=@APP_DIR@
+# Single project env file (root .env); empty secrets are read from Secrets Manager (API_KEYS_SECRET_ID).
+Environment=PYTHONPATH=@APP_DIR@ DATA_PIPELINE_ENV_FILE=@APP_DIR@/.env PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
+ExecStart=@VENV@/bin/python -m data_pipeline collector
+# The collector runs the processor in memory (branch 2): it needs the embedding model cache too.
+StateDirectory=contract-risk/models
+Restart=on-failure
+RestartSec=30
+# A full crawl can take long; an interrupted run keeps its SQS message and is redelivered.
+TimeoutStopSec=300
+Nice=10
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

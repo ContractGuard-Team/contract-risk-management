@@ -8,7 +8,6 @@ from agents.agent_1_classification.tools.extract_key_terms import extract_key_te
 
 class ClassificationAgent(BaseAgent):
     agent_id = "agent_1_classification"
-    task_prompt = "prompts/classify.md"
     output_type = ClassificationOutput
     tool_functions = {"classify_clause": classify_clause, "extract_key_terms": extract_key_terms}
 

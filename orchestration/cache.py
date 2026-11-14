@@ -51,5 +51,17 @@ class ContractCache:
             if row[0] != serialized:
                 raise ValueError("Attempted to overwrite an immutable cached result")
 
+    def release_memory(self, key, stage):
+        """Drop working-memory snapshots of a finished stage; results stay immutable. Idempotent."""
+        with self._lock, self._db:
+            rows = self._db.execute("SELECT item_key, value FROM entries WHERE run_key=? AND stage=?",
+                                    (key, stage)).fetchall()
+            for item, value in rows:
+                data = json.loads(value)
+                if data.pop("memory", None) is not None:
+                    self._db.execute("UPDATE entries SET value=? WHERE run_key=? AND stage=? AND item_key=?",
+                                     (canonical(data), key, stage, item))
+        return len(rows)
+
     def close(self):
         self._db.close()

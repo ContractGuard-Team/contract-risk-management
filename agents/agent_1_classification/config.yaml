@@ -1,10 +1,9 @@
-# TODO: Fill values later. Explicit settings > agent env > global env > this file.
-region:
-model_id:
-profile:
-# TODO: Set only options supported by the chosen model.
+# TODO: Fill values later. Explicit settings > AGENT_<n>_MODEL > OPENAI_MODEL > this file.
+# The API key comes only from OPENAI_API_KEY (root .env / Config Service), never from this file.
+model:
+# TODO: Set only options supported by the chosen OpenAI model (Chat Completions parameters).
 inference_config:
-  maxTokens:
+  max_completion_tokens:
   temperature:
-  topP:
-  stopSequences:
+  top_p:
+  stop:

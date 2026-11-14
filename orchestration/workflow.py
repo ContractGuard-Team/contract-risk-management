@@ -1,11 +1,12 @@
-from copy import deepcopy
 from dataclasses import asdict
 from langgraph.graph import END, START, StateGraph
 
-from common.schemas.agent_messages import AgentRequest
-from hermes_integration.memory_adapter import create_contract_memory
+from common.schemas.contract import ContractChunk, ContractInput
+from agents.agent_1_classification.context.context_builder import build_chunk_request
+from agents.memory.short_term import create_contract_memory
 from orchestration.context_transfer import handoff_request
-from orchestration.result_aggregator import aggregate_contract
+from orchestration.result_aggregator import aggregate_contract, chunk_scope
+from orchestration.retry_policy import AGENT_STAGE_RETRY
 from orchestration.state import ContractState
 
 AGENT_IDS = ("agent_1_classification", "agent_2_risk_scoring", "agent_3_recommendation")
@@ -21,28 +22,32 @@ class WorkflowSteps:
         chunk = contract["chunks"][index]
         agent_id = AGENT_IDS[0]
         cached = self.cache.get(key, "classification", chunk["chunk_id"])
+        scope = chunk_scope(contract, index)
+        if cached is not None and cached.get("scope") != scope:
+            raise ValueError("Cached Agent 1 result belongs to another contract chunk")
         with self.observer.span("agent_1_classification.chunk", kind="agent", metadata={"chunk_id": chunk["chunk_id"],
                                 "chunk_index": index, "cache_hit": cached is not None}) as observation:
             observation.summary(input={"chunk_index": index, "chunk_count": contract["expected_chunk_count"],
                                        "text_characters": len(chunk["text"])})
             cache_hit = cached is not None
             if cached is None:
-                snapshot = None
+                snapshot = None  # first chunk of a contract always starts with empty memory
                 if index:
+                    # Continue only from this contract's previous chunk; never from another contract's context.
                     prior = self.cache.get(key, "classification", contract["chunks"][index - 1]["chunk_id"])
-                    if prior is None:
-                        raise ValueError("Previous chunk memory is missing")
+                    if prior is None or prior.get("scope") != chunk_scope(contract, index - 1) or "memory" not in prior:
+                        raise ValueError("Agent 1 memory of the previous chunk in this contract is missing")
                     snapshot = prior["memory"]
                 memory = create_contract_memory(self.policies[agent_id], self.summarizers[agent_id],
                                                 snapshot, self.counter)
-                context = deepcopy(contract["context"])
-                context["workflow"] = {"contract_id": contract["contract_id"], "version": contract["version"],
-                                       "chunk_id": chunk["chunk_id"], "chunk_index": index,
-                                       "chunk_count": contract["expected_chunk_count"],
-                                       "source_metadata": chunk["metadata"]}
-                result = self.agents[agent_id].run(AgentRequest(chunk["text"], context), memory=memory,
+                manifest = ContractInput(contract["contract_id"], contract["version"],
+                                         [ContractChunk(**item) for item in contract["chunks"]],
+                                         contract["expected_chunk_count"], contract["context"])
+                request = build_chunk_request(manifest, index)
+                result = self.agents[agent_id].run(request, memory=memory,
                            observer=self.observer, trace_metadata={"chunk_id": chunk["chunk_id"], "chunk_index": index})
-                cached = {"result": asdict(result), "memory": memory.snapshot()}
+                # Result and memory are written in one row so resume never sees one without the other.
+                cached = {"scope": scope, "result": asdict(result), "memory": memory.snapshot()}
                 self.cache.put(key, "classification", cached, chunk["chunk_id"])
             observation.summary(output={"status": "completed", "cache_hit": cache_hit,
                                         "text_characters": len(cached["result"]["text"])})
@@ -51,9 +56,15 @@ class WorkflowSteps:
     def aggregate(self, state):
         with self.observer.span("aggregate_classification") as observation:
             observation.summary(input={"expected_chunk_count": state["contract"]["expected_chunk_count"]})
-            aggregate = aggregate_contract(state["contract"], self.cache, state["cache_key"])
-            self.cache.put(state["cache_key"], "aggregate", aggregate)
-            observation.summary(output={"chunk_count": aggregate["chunk_count"], "status": "cached"})
+            key = state["cache_key"]
+            aggregate = aggregate_contract(state["contract"], self.cache, key)
+            self.cache.put(key, "aggregate", aggregate)
+            if self.cache.get(key, "aggregate") != aggregate:
+                raise ValueError("Agent 1 aggregate could not be read back; keep memory for retry")
+            # Contract confirmed complete: Agent 1 working memory is no longer needed, outputs are kept.
+            self.cache.release_memory(key, "classification")
+            observation.summary(output={"chunk_count": aggregate["chunk_count"], "status": "cached",
+                                        "agent_1_memory": "released"})
         return {"aggregate": aggregate, "results": {AGENT_IDS[0]: aggregate}}
 
     def _downstream(self, state, agent_id, source_name, source):
@@ -86,10 +97,16 @@ class WorkflowSteps:
 
 def build_workflow(steps, checkpointer):
     graph = StateGraph(ContractState)
-    for name, node in (("classify_chunk", steps.classify_chunk), ("aggregate", steps.aggregate),
-                       ("evaluate", steps.evaluate), ("recommend", steps.recommend)):
-        graph.add_node(name, node)
-    graph.add_edge(START, "classify_chunk")
+    # Agent nodes re-run only on transient model/service failures (see retry_policy.py).
+    for name, node, retry in (("classify_chunk", steps.classify_chunk, AGENT_STAGE_RETRY),
+                              ("aggregate", steps.aggregate, None),
+                              ("evaluate", steps.evaluate, AGENT_STAGE_RETRY),
+                              ("recommend", steps.recommend, AGENT_STAGE_RETRY)):
+        graph.add_node(name, node, retry_policy=retry)
+    # Resume: a run whose Agent 1 chunks are all cached starts at aggregate -> Agent 2 directly.
+    graph.add_conditional_edges(START, lambda state:
+        "classify_chunk" if state["next_chunk"] < state["contract"]["expected_chunk_count"] else "aggregate",
+        {"classify_chunk": "classify_chunk", "aggregate": "aggregate"})
     graph.add_conditional_edges("classify_chunk", lambda state:
         "classify_chunk" if state["next_chunk"] < state["contract"]["expected_chunk_count"] else "aggregate",
         {"classify_chunk": "classify_chunk", "aggregate": "aggregate"})

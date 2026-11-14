@@ -2,7 +2,7 @@ from copy import deepcopy
 import json
 
 from common.schemas.agent_messages import AgentRequest
-from hermes_integration.context_budget import ContextBudgetExceeded
+from agents.hermes.context_budget import ContextBudgetExceeded
 
 
 def handoff_request(agent, contract, source_name, source, policy, summarizer, counter, cache_key):

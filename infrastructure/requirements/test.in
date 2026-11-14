@@ -1,0 +1,6 @@
+-r processing.in
+-r agents.in
+moto[server,s3,sqs,dynamodb,secretsmanager,ssm]>=5,<6
+nbformat>=5,<6
+nbclient>=0.10,<1
+ipykernel>=6,<8

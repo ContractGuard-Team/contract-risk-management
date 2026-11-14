@@ -1,4 +1,5 @@
 from agents.base import BaseAgent
+from agents.shared.tools import external_tool
 from agents.agent_2_risk_scoring.context.context_builder import build_context
 from agents.agent_2_risk_scoring.schemas.input import RiskScoringInput
 from agents.agent_2_risk_scoring.schemas.output import RiskScoringOutput
@@ -10,9 +11,10 @@ from agents.agent_2_risk_scoring.tools.risk_calculator import risk_calculator
 
 class RiskScoringAgent(BaseAgent):
     agent_id = "agent_2_risk_scoring"
-    task_prompt = "prompts/evaluate.md"
     output_type = RiskScoringOutput
-    tool_functions = {"qdrant_search": qdrant_search, "legal_search": legal_search, "market_search": market_search, "risk_calculator": risk_calculator}
+    tool_functions = {"qdrant_search": qdrant_search, "legal_search": legal_search, "market_search": market_search, "risk_calculator": risk_calculator,
+                      **{name: external_tool(name) for name in ("web_search", "postgres_query", "s3_get_object", "s3_list_objects", "qdrant_collection_info",
+                                                       "supabase_select", "supabase_list_tables")}}
 
     def build_context(self, request):
         return build_context(request)

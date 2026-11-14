@@ -1,0 +1,9 @@
+-r base.in
+# MCP gateway: server SDK, read-only PostgreSQL driver, Tavily web search, Qdrant client, Supabase client
+mcp>=1.30,<2
+psycopg[binary]>=3.2,<4
+tavily-python>=0.7,<1
+qdrant-client>=1.15,<2
+supabase>=2.20,<3
+# Local embedding model for agent text queries (same model as the data pipeline)
+fastembed>=0.9,<1

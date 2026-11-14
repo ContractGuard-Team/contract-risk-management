@@ -32,8 +32,8 @@ khi runtime chưa thực hiện và trả kết quả xác nhận.
 
 ## 2. Xử lý theo prompt và bổ sung bằng chứng qua MCP
 
-Thực hiện tác vụ theo `prompts/system.md`, `prompts/evaluate.md`, soul, constraints
-và context instructions đã cấu hình. Không tự đặt công thức, trọng số hoặc ngưỡng
+Thực hiện tác vụ theo `prompts/core.md` (xử lý trung tâm), `prompts/external.md` (xử lý ngoài luồng) và `prompts/examples/`
+và bài học long-term memory đã duyệt. Không tự đặt công thức, trọng số hoặc ngưỡng
 điểm rủi ro khi các quy tắc nghiệp vụ còn để trống.
 
 ### 2.1. Truy xuất database trước

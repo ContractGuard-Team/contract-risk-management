@@ -1,0 +1,466 @@
+name: ${COMPOSE_PROJECT_NAME:-contract-risk}
+services:
+  worker:
+    image: contract-risk/worker:${IMAGE_TAG:-local}
+    build:
+      context: .
+      dockerfile: infrastructure/docker/Dockerfile
+      target: worker
+    environment:
+      APP_ENV: ${APP_ENV:-production}
+      MONITORING_URL: http://monitoring:8000
+      CONFIG_URL: http://config:8000
+      HTTP_TIMEOUT_SECONDS: ${HTTP_TIMEOUT_SECONDS:-120}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      JOB_TIMEOUT_SECONDS: ${JOB_TIMEOUT_SECONDS:-3600}
+      SERVICE_NAME: worker
+      CONFIG_TOKEN: ${CONFIG_TOKEN_WORKER:-}
+      CONFIG_SECRET_BINDINGS: '["INTERNAL_API_TOKEN"]'
+      AWS_REGION: ${AWS_REGION:-}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
+      AWS_ENDPOINT_URL: ${AWS_ENDPOINT_URL:-}
+      WORKER_ENABLED: ${WORKER_ENABLED:-false}
+      WORKER_INPUT_PROCESSING_URL: http://input-processing:8000
+      WORKER_LANGGRAPH_URL: http://langgraph:8000
+      WORKER_SQS_QUEUE_URL: ${WORKER_SQS_QUEUE_URL:-}
+      WORKER_DYNAMODB_TABLE: ${WORKER_DYNAMODB_TABLE:-contract-risk-jobs}
+      WORKER_DYNAMODB_EVENTS_TABLE: ${WORKER_DYNAMODB_EVENTS_TABLE:-contract-risk-job-events}
+      WORKER_INPUT_BUCKET: ${WORKER_INPUT_BUCKET:-}
+      WORKER_OUTPUT_BUCKET: ${WORKER_OUTPUT_BUCKET:-}
+      WORKER_OUTPUT_PREFIX: ${WORKER_OUTPUT_PREFIX:-results}
+    networks:
+    - backend
+    expose:
+    - '8000'
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 60s
+    read_only: true
+    tmpfs:
+    - /tmp
+    cap_drop:
+    - ALL
+    security_opt:
+    - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '3'
+    volumes:
+    - worker-data:/data
+    depends_on:
+      config:
+        condition: service_healthy
+      input-processing:
+        condition: service_healthy
+      langgraph:
+        condition: service_healthy
+      monitoring:
+        condition: service_healthy
+  input-processing:
+    image: contract-risk/input-processing:${IMAGE_TAG:-local}
+    build:
+      context: .
+      dockerfile: infrastructure/docker/Dockerfile
+      target: input-processing
+    environment:
+      APP_ENV: ${APP_ENV:-production}
+      MONITORING_URL: http://monitoring:8000
+      CONFIG_URL: http://config:8000
+      HTTP_TIMEOUT_SECONDS: ${HTTP_TIMEOUT_SECONDS:-120}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      JOB_TIMEOUT_SECONDS: ${JOB_TIMEOUT_SECONDS:-3600}
+      SERVICE_NAME: input-processing
+      CONFIG_TOKEN: ${CONFIG_TOKEN_INPUT_PROCESSING:-}
+      CONFIG_SECRET_BINDINGS: '["INTERNAL_API_TOKEN"]'
+    networks:
+    - backend
+    expose:
+    - '8000'
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 60s
+    read_only: true
+    tmpfs:
+    - /tmp
+    cap_drop:
+    - ALL
+    security_opt:
+    - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '3'
+    volumes:
+    - input-processing-data:/data
+    depends_on:
+      config:
+        condition: service_healthy
+      monitoring:
+        condition: service_healthy
+  agent-1:
+    image: contract-risk/agent-1:${IMAGE_TAG:-local}
+    build:
+      context: .
+      dockerfile: infrastructure/docker/Dockerfile
+      target: agent-1
+    environment:
+      APP_ENV: ${APP_ENV:-production}
+      MONITORING_URL: http://monitoring:8000
+      CONFIG_URL: http://config:8000
+      HTTP_TIMEOUT_SECONDS: ${HTTP_TIMEOUT_SECONDS:-120}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      JOB_TIMEOUT_SECONDS: ${JOB_TIMEOUT_SECONDS:-3600}
+      SERVICE_NAME: agent-1
+      CONFIG_TOKEN: ${CONFIG_TOKEN_AGENT_1:-}
+      CONFIG_SECRET_BINDINGS: '["INTERNAL_API_TOKEN", "OPENAI_API_KEY"]'
+      MODEL_PROVIDER: ${MODEL_PROVIDER:-openai}
+      OPENAI_MODEL: ${OPENAI_MODEL:-}
+      AGENT_1_MODEL: ${AGENT_1_MODEL:-}
+      LONG_TERM_MEMORY_DIR: /data/long_term_memory
+    networks:
+    - backend
+    expose:
+    - '8000'
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 60s
+    read_only: true
+    tmpfs:
+    - /tmp
+    cap_drop:
+    - ALL
+    security_opt:
+    - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '3'
+    volumes:
+    - agent-1-data:/data
+    depends_on:
+      config:
+        condition: service_healthy
+      monitoring:
+        condition: service_healthy
+  agent-2:
+    image: contract-risk/agent-2:${IMAGE_TAG:-local}
+    build:
+      context: .
+      dockerfile: infrastructure/docker/Dockerfile
+      target: agent-2
+    environment:
+      APP_ENV: ${APP_ENV:-production}
+      MONITORING_URL: http://monitoring:8000
+      CONFIG_URL: http://config:8000
+      HTTP_TIMEOUT_SECONDS: ${HTTP_TIMEOUT_SECONDS:-120}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      JOB_TIMEOUT_SECONDS: ${JOB_TIMEOUT_SECONDS:-3600}
+      SERVICE_NAME: agent-2
+      CONFIG_TOKEN: ${CONFIG_TOKEN_AGENT_2:-}
+      CONFIG_SECRET_BINDINGS: '["INTERNAL_API_TOKEN", "OPENAI_API_KEY", "MCP_API_TOKEN"]'
+      MODEL_PROVIDER: ${MODEL_PROVIDER:-openai}
+      OPENAI_MODEL: ${OPENAI_MODEL:-}
+      AGENT_2_MODEL: ${AGENT_2_MODEL:-}
+      LONG_TERM_MEMORY_DIR: /data/long_term_memory
+      MCP_URL: http://mcp:8000/mcp
+    networks:
+    - backend
+    expose:
+    - '8000'
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 60s
+    read_only: true
+    tmpfs:
+    - /tmp
+    cap_drop:
+    - ALL
+    security_opt:
+    - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '3'
+    volumes:
+    - agent-2-data:/data
+    depends_on:
+      config:
+        condition: service_healthy
+      monitoring:
+        condition: service_healthy
+  agent-3:
+    image: contract-risk/agent-3:${IMAGE_TAG:-local}
+    build:
+      context: .
+      dockerfile: infrastructure/docker/Dockerfile
+      target: agent-3
+    environment:
+      APP_ENV: ${APP_ENV:-production}
+      MONITORING_URL: http://monitoring:8000
+      CONFIG_URL: http://config:8000
+      HTTP_TIMEOUT_SECONDS: ${HTTP_TIMEOUT_SECONDS:-120}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      JOB_TIMEOUT_SECONDS: ${JOB_TIMEOUT_SECONDS:-3600}
+      SERVICE_NAME: agent-3
+      CONFIG_TOKEN: ${CONFIG_TOKEN_AGENT_3:-}
+      CONFIG_SECRET_BINDINGS: '["INTERNAL_API_TOKEN", "OPENAI_API_KEY", "MCP_API_TOKEN"]'
+      MODEL_PROVIDER: ${MODEL_PROVIDER:-openai}
+      OPENAI_MODEL: ${OPENAI_MODEL:-}
+      AGENT_3_MODEL: ${AGENT_3_MODEL:-}
+      LONG_TERM_MEMORY_DIR: /data/long_term_memory
+      MCP_URL: http://mcp:8000/mcp
+    networks:
+    - backend
+    expose:
+    - '8000'
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 60s
+    read_only: true
+    tmpfs:
+    - /tmp
+    cap_drop:
+    - ALL
+    security_opt:
+    - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '3'
+    volumes:
+    - agent-3-data:/data
+    depends_on:
+      config:
+        condition: service_healthy
+      monitoring:
+        condition: service_healthy
+  langgraph:
+    image: contract-risk/langgraph:${IMAGE_TAG:-local}
+    build:
+      context: .
+      dockerfile: infrastructure/docker/Dockerfile
+      target: langgraph
+    environment:
+      APP_ENV: ${APP_ENV:-production}
+      MONITORING_URL: http://monitoring:8000
+      CONFIG_URL: http://config:8000
+      HTTP_TIMEOUT_SECONDS: ${HTTP_TIMEOUT_SECONDS:-120}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      JOB_TIMEOUT_SECONDS: ${JOB_TIMEOUT_SECONDS:-3600}
+      SERVICE_NAME: langgraph
+      CONFIG_TOKEN: ${CONFIG_TOKEN_LANGGRAPH:-}
+      CONFIG_SECRET_BINDINGS: '["INTERNAL_API_TOKEN"]'
+      MODEL_PROVIDER: ${MODEL_PROVIDER:-openai}
+      AGENT_1_URL: http://agent-1:8000
+      AGENT_2_URL: http://agent-2:8000
+      AGENT_3_URL: http://agent-3:8000
+    networks:
+    - backend
+    expose:
+    - '8000'
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 60s
+    read_only: true
+    tmpfs:
+    - /tmp
+    cap_drop:
+    - ALL
+    security_opt:
+    - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '3'
+    volumes:
+    - langgraph-data:/data
+    depends_on:
+      config:
+        condition: service_healthy
+      agent-1:
+        condition: service_healthy
+      agent-2:
+        condition: service_healthy
+      agent-3:
+        condition: service_healthy
+  monitoring:
+    image: contract-risk/monitoring:${IMAGE_TAG:-local}
+    build:
+      context: .
+      dockerfile: infrastructure/docker/Dockerfile
+      target: monitoring
+    environment:
+      APP_ENV: ${APP_ENV:-production}
+      MONITORING_URL: ''
+      CONFIG_URL: http://config:8000
+      HTTP_TIMEOUT_SECONDS: ${HTTP_TIMEOUT_SECONDS:-120}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      JOB_TIMEOUT_SECONDS: ${JOB_TIMEOUT_SECONDS:-3600}
+      SERVICE_NAME: monitoring
+      CONFIG_TOKEN: ${CONFIG_TOKEN_MONITORING:-}
+      CONFIG_SECRET_BINDINGS: '["INTERNAL_API_TOKEN", "LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY"]'
+      LANGFUSE_ENABLED: ${LANGFUSE_ENABLED:-false}
+      LANGFUSE_BASE_URL: ${LANGFUSE_BASE_URL:-https://cloud.langfuse.com}
+      MONITORING_WORKER_ENABLED: ${MONITORING_WORKER_ENABLED:-false}
+      MONITORING_WORKER_URL: http://worker:8000
+      MONITORING_RETENTION_DAYS: ${MONITORING_RETENTION_DAYS:-30}
+      ALERT_WEBHOOK_URL: ${ALERT_WEBHOOK_URL:-}
+      ALERT_SLOW_STAGE_MS: ${ALERT_SLOW_STAGE_MS:-900000}
+      ALERT_THROTTLE_COUNT: ${ALERT_THROTTLE_COUNT:-3}
+      ALERT_THROTTLE_WINDOW_MINUTES: ${ALERT_THROTTLE_WINDOW_MINUTES:-10}
+    networks:
+    - backend
+    expose:
+    - '8000'
+    # Loopback only (not public): the legal data pipeline on the host posts its events here.
+    ports:
+    - 127.0.0.1:${MONITORING_HOST_PORT:-8099}:8000
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 60s
+    read_only: true
+    tmpfs:
+    - /tmp
+    cap_drop:
+    - ALL
+    security_opt:
+    - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '3'
+    volumes:
+    - monitoring-data:/data
+    depends_on:
+      config:
+        condition: service_healthy
+  config:
+    image: contract-risk/config:${IMAGE_TAG:-local}
+    build:
+      context: .
+      dockerfile: infrastructure/docker/Dockerfile
+      target: config
+    environment:
+      APP_ENV: ${APP_ENV:-production}
+      MONITORING_URL: http://monitoring:8000
+      CONFIG_URL: ''
+      HTTP_TIMEOUT_SECONDS: ${HTTP_TIMEOUT_SECONDS:-120}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      JOB_TIMEOUT_SECONDS: ${JOB_TIMEOUT_SECONDS:-3600}
+      SERVICE_NAME: config
+      CONFIG_SECRET_BINDINGS: '["INTERNAL_API_TOKEN"]'
+      AWS_REGION: ${AWS_REGION:-}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
+      AWS_ENDPOINT_URL: ${AWS_ENDPOINT_URL:-}
+      CONFIG_POLICY_PATH: /app/config/policy.json
+      CONFIG_CLIENT_TOKENS: '{"worker": "${CONFIG_TOKEN_WORKER:?Run scripts/init_env.py}",
+        "input-processing": "${CONFIG_TOKEN_INPUT_PROCESSING:?Run scripts/init_env.py}",
+        "agent-1": "${CONFIG_TOKEN_AGENT_1:?Run scripts/init_env.py}", "agent-2":
+        "${CONFIG_TOKEN_AGENT_2:?Run scripts/init_env.py}", "agent-3": "${CONFIG_TOKEN_AGENT_3:?Run
+        scripts/init_env.py}", "langgraph": "${CONFIG_TOKEN_LANGGRAPH:?Run scripts/init_env.py}",
+        "monitoring": "${CONFIG_TOKEN_MONITORING:?Run scripts/init_env.py}", "mcp": "${CONFIG_TOKEN_MCP:?Run
+        scripts/init_env.py}"}'
+    networks:
+    - backend
+    expose:
+    - '8000'
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 60s
+    read_only: true
+    tmpfs:
+    - /tmp
+    cap_drop:
+    - ALL
+    security_opt:
+    - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '3'
+    env_file:
+    - path: .env
+      required: true
+    volumes:
+    - ./config/policy.json:/app/config/policy.json:ro
+  mcp:
+    image: contract-risk/mcp:${IMAGE_TAG:-local}
+    build:
+      context: .
+      dockerfile: infrastructure/docker/Dockerfile
+      target: mcp
+    environment:
+      APP_ENV: ${APP_ENV:-production}
+      MONITORING_URL: http://monitoring:8000
+      CONFIG_URL: http://config:8000
+      SERVICE_NAME: mcp
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      CONFIG_TOKEN: ${CONFIG_TOKEN_MCP:-}
+      CONFIG_SECRET_BINDINGS: '["INTERNAL_API_TOKEN", "MCP_API_TOKEN", "TAVILY_API_KEY", "QDRANT_URL", "QDRANT_API_KEY", "SUPABASE_URL", "SUPABASE_PUBLISHABLE_KEY", "SUPABASE_SECRET_KEY"]'
+      AWS_REGION: ${AWS_REGION:-}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
+      AWS_ENDPOINT_URL: ${AWS_ENDPOINT_URL:-}
+      QDRANT_COLLECTION: ${QDRANT_COLLECTION:-legal_documents}
+      SUPABASE_TABLES: ${SUPABASE_TABLES:-}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-intfloat/multilingual-e5-large}
+      EMBEDDING_DIMENSIONS: ${EMBEDDING_DIMENSIONS:-1024}
+      EMBEDDING_CACHE_DIR: /models
+      RAG_RERANK_MODEL: ${RAG_RERANK_MODEL-jinaai/jina-reranker-v2-base-multilingual}
+      HF_HOME: /tmp/huggingface
+      # Models come from ./models (scripts/download_models.py); never downloaded at runtime.
+      HF_HUB_OFFLINE: ${HF_HUB_OFFLINE:-1}
+      HF_HUB_DISABLE_TELEMETRY: '1'
+      POSTGRES_DSN: ${POSTGRES_DSN:-}
+      MCP_S3_BUCKETS: ${MCP_S3_BUCKETS:-}
+      TAVILY_SEARCH_DEPTH: ${TAVILY_SEARCH_DEPTH:-basic}
+      TAVILY_COUNTRY: ${TAVILY_COUNTRY-vietnam}
+    networks:
+    - backend
+    expose:
+    - '8000'
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 30s
+    read_only: true
+    tmpfs:
+    - /tmp
+    cap_drop:
+    - ALL
+    security_opt:
+    - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '3'
+    volumes:
+    - ./models:/models:ro
+    depends_on:
+      config:
+        condition: service_healthy
+networks:
+  backend:
+    driver: bridge
+volumes:
+  worker-data: {}
+  input-processing-data: {}
+  agent-1-data: {}
+  agent-2-data: {}
+  agent-3-data: {}
+  langgraph-data: {}
+  monitoring-data: {}

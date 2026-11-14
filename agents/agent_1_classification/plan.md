@@ -28,8 +28,8 @@ các thao tác này chỉ bằng nội dung trả lời của model.
 
 ## 2. Xử lý chunk theo prompt
 
-- Thực hiện tác vụ được định nghĩa trong `prompts/system.md` và `prompts/classify.md`,
-  cùng các ràng buộc, soul và context instructions đã cấu hình.
+- Thực hiện tác vụ được định nghĩa trong `prompts/core.md` (xử lý trung tâm), `prompts/external.md` (xử lý ngoài luồng) và `prompts/examples/`,
+  cùng bài học long-term memory đã duyệt. (plan.md là tài liệu, không được nạp vào prompt.)
 - Dùng ngữ cảnh trước đó để hiểu nội dung tiếp nối và các tham chiếu giữa những
   phần của cùng hợp đồng. Phân biệt nội dung thực sự có trong chunk với thông tin
   được mang theo từ memory.
@@ -96,7 +96,9 @@ tổng hợp đã lưu; không cần chạy lại Agent 1 hoặc phục hồi l�
 - Dọn memory thất bại: giữ nguyên kết quả đã lưu, báo lỗi thao tác dọn và cho phép
   thực hiện lại; không gọi lại model chỉ để dọn memory.
 
-<!-- Trạng thái triển khai: plan đã xác định quy trình. Runtime hiện có xử lý chunk,
-cache output/snapshot và handoff; chưa có thao tác dọn snapshot Agent 1 sau khi tổng
-hợp hay dọn checkpoint toàn job. Cần triển khai các thao tác dọn bằng code riêng;
-việc nạp plan này vào prompt không tự tạo ra hành vi xóa memory. -->
+<!-- Trạng thái triển khai (2026-11-07): orchestration/workflow.py lưu result + memory +
+scope (contract_id, version, chunk_id, chunk_index) trong một row cache; khôi phục memory
+chỉ từ chunk N-1 cùng contract; aggregate kiểm scope từng chunk, lưu và đọc lại bản tổng hợp
+rồi mới gọi ContractCache.release_memory để xóa snapshot Agent 1 (giữ output). Memory RAM
+là object cục bộ mỗi lượt gọi nên tự giải phóng. Chưa dọn checkpoint toàn job. Xem
+docs/agent_1_flow.md. -->
