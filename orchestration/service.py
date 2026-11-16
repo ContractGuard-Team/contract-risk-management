@@ -14,7 +14,7 @@ from monitoring.service_observer import ServiceObserver
 
 def contract_from_payload(payload):
     raw = payload["contract"]
-    contract = ContractInput(raw["contract_id"], raw["version"], [ContractChunk(**c) for c in raw["chunks"]],
+    contract = ContractInput(raw["contract_id"], raw["contract_version"], [ContractChunk(**c) for c in raw["chunks"]],
                              raw["expected_chunk_count"], raw.get("context", {}))
     contract.validate()
     if contract.contract_id != payload["identity"]["contract_id"]:

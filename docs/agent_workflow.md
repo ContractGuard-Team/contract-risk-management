@@ -22,7 +22,7 @@ flowchart LR
 ```
 
 LangGraph định nghĩa các node trong `orchestration/workflow.py`.
-`ContractInput` yêu cầu contract ID, version, danh sách chunk và expected_chunk_count.
+`ContractInput` yêu cầu contract_id, contract_version, danh sách chunk và expected_chunk_count.
 Index phải liên tục từ 0, ID chunk không trùng, text không rỗng. Cần cung cấp đúng
 expected_chunk_count từ bước chia file để phát hiện cả trường hợp thiếu chunk cuối.
 
@@ -49,7 +49,7 @@ engine trực tiếp quanh lần gọi model (OpenAI) của BaseAgent; không kh
 AIAgent tool loop hoặc bộ nhớ người dùng toàn cục.
 
 - Agent 1: trước chunk tiếp theo, khôi phục snapshot từ chunk trước đã lưu thành công;
-  snapshot phải có `scope` đúng contract/version/chunk N−1, sai thì dừng trước khi gọi model.
+  snapshot phải có `scope` đúng contract_id/contract_version/chunk N−1, sai thì dừng trước khi gọi model.
   Context gồm system instructions, summary cũ nếu có, các turn gần nhất và chunk hiện tại.
 - Agent 2: memory riêng, đầu vào là aggregate classification của toàn bộ hợp đồng.
 - Agent 3: memory riêng, đầu vào là output Agent 2.
@@ -72,7 +72,7 @@ giữ các turn gần nhất nếu vừa ngân sách. Summary tiếp tục đư�
 Nếu cần, cả turn gần nhất cũng có thể được tóm tắt để dành chỗ cho chunk mới.
 System instructions và chunk đang xử lý không bị cắt bỏ.
 
-Prompt nén (short term) nằm ở `agents/shared/prompts/short_term_summary.md`, đang để trống. Xem `docs/agent_core.md`.
+Prompt nén (short term) nằm ở `agents/<agent>/memory/short_term_summary.md` (riêng từng agent), đang để trống. Xem `docs/agent_core.md`.
 Model tóm tắt dùng cùng OpenAI provider của agent nhận context. Input quá lớn được
 chia thành phần vừa ngân sách rồi tóm tắt nhiều tầng; mọi phần được đưa vào bước xử lý.
 Summary không thu nhỏ, không hoàn chỉnh hoặc chunk hiện tại vẫn quá lớn sẽ gây lỗi
@@ -90,7 +90,7 @@ cache trong vòng suy luận ở phiên bản này.
 
 - SQLite mặc định: `.cache/contracts.sqlite3`; inject `ContractCache(path)` để đổi đường dẫn.
   `ContractCache()` không truyền path là cache RAM, phù hợp unit test.
-- Key phân biệt job ID + contract ID + version. Job ID phải được cấp duy nhất trong
+- Key phân biệt job_id + contract_id + contract_version. Job ID phải được cấp duy nhất trong
   phạm vi ứng dụng/tenant; backend cần bổ sung phân quyền khi nối API.
 - Fingerprint bao gồm toàn bộ chunk/context, model, ngân sách, prompt và cấu hình inference.
   Không dùng lại job với input/cấu hình khác. Thay đổi code, tokenizer, handler hoặc

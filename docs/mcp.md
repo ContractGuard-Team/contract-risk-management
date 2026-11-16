@@ -34,7 +34,7 @@ agent-2 / agent-3 (BaseAgent.run_tool)
 | Tool | Tham số | Kết quả | Giới hạn |
 | --- | --- | --- | --- |
 | `web_search` | query (1–400 ký tự), max_results ≤20 | `{results:[{title,url,snippet,score}]}` | Tavily `/search`, `TAVILY_SEARCH_DEPTH` (basic = 1 credit/lần), `TAVILY_COUNTRY` (vietnam); thiếu `TAVILY_API_KEY` → báo lỗi cấu hình |
-| `qdrant_search` | vector (3072 số), collection (bỏ trống = QDRANT_COLLECTION), limit ≤50, query_filter (JSON filter Qdrant) | `{points:[{id,score,payload}]}` | chỉ đọc (query_points); agent phải gửi vector cùng model embedding với dữ liệu |
+| `qdrant_search` | query (text, MCP tự embed bằng e5) hoặc vector (1024 số), collection (bỏ trống = QDRANT_COLLECTION), limit ≤50, query_filter (JSON filter Qdrant; mặc định current + in_force) | `{points:[{id,score,payload}]}` | chỉ đọc (query_points); vector tự gửi phải cùng model `intfloat/multilingual-e5-large` |
 | `qdrant_collection_info` | collection (bỏ trống được) | `{collection,status,points_count,vectors,payload_indexes}` | chỉ đọc |
 | `postgres_query` | sql (1 câu), params | `{rows, truncated}` | transaction read-only, statement_timeout 5s, ≤100 dòng, từ chối `;` giữa câu |
 | `s3_list_objects` | prefix, bucket (bỏ trống = bucket duy nhất đã cấu hình), max_keys ≤1000, continuation_token | `{bucket,prefix,objects:[{key,size,last_modified}],truncated,next_token}` | chỉ đọc |
@@ -137,3 +137,22 @@ lỗi khác chỉ trả tên lớp lỗi, không trả nội dung/credential.
 - Chưa làm các bước cài đặt toàn máy trong SKILL.md (Tavily CLI `curl … | bash`, `npx skills add … --global`, OAuth login):
   đó là công cụ cho coding agent trên máy dev, không cần cho service.
 - Key đã dán trong chat: nên tạo key mới trên app.tavily.com và thay trong `.env`.
+
+## Tài liệu gốc S3 đối tác: `partner_document` (2026-11-17, mới nhất)
+
+- Chỉ Agent 3 có tool này (`agents/agent_3_recommendation/agent.py`, `MCP_TOOLS`). Code: `mcp_server/partner_reader.py`
+  (`PartnerDocuments`), gateway `FACTORIES["partner_document"]`, readiness theo `PARTNER_S3_BUCKET`.
+- Tham số: `key` (bắt buộc, chỉ `quarantine/…` hoặc `clean/…`, cấm `..`/`//`), `offset`, `max_chars` (≤50.000).
+  Trả `{bucket, key, content_type, extraction, page_count?, characters, offset, text, next_offset}`.
+- Key lấy từ `context.source_document` do worker ghi khi đọc `request.json` (`workers/partner.py`):
+  `{bucket, source_file_key, clean_file_key}`. Agent không tự ghép key.
+- Bucket: compose đặt `PARTNER_S3_BUCKET=${WORKER_INPUT_BUCKET}` cho mcp. Client S3 chặn mọi thao tác ngoài
+  `GetObject/HeadObject/ListObjectsV2` (cùng hook với `s3_reader`). IAM đối tác (07-worker-aws-integration §2) chỉ cho role
+  `GetObject` trên `quarantine/*` và `results/*/request.json` — **không** đọc được `clean/*`. Agent 3 chạy trước khi worker
+  xóa quarantine (sau completed) nên dùng `source_file_key`.
+- Text UTF-8 giải mã trực tiếp; PDF/DOCX/ảnh gửi sang service input-processing (`INPUT_PROCESSING_URL`,
+  `INTERNAL_API_TOKEN`) như một job idempotent `partner-doc-<sha256[:32]>` → cùng trích xuất/OCR như luồng hợp đồng,
+  ghép chunk theo thứ tự (overlap 0). Cache 8 tài liệu theo (key, ETag) trong tiến trình mcp.
+- Kiểm chứng: unit test Moto (phân trang, binary → input-processing, cache, key sai, chặn ghi); chạy thật trong stack thử:
+  DOCX qua input-processing container trả đúng nguyên văn; container agent-3 lấy 10 spec tool từ MCP qua mạng
+  (có `partner_document`, `legal_reference`). Chưa đọc bucket ContractGuard thật (local không có credential role).

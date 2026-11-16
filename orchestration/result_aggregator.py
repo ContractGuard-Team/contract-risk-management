@@ -1,6 +1,6 @@
 def chunk_scope(contract, index):
     """Identity binding each Agent 1 result/memory snapshot to one contract chunk."""
-    return {"contract_id": contract["contract_id"], "version": contract["version"],
+    return {"contract_id": contract["contract_id"], "contract_version": contract["contract_version"],
             "chunk_id": contract["chunks"][index]["chunk_id"], "chunk_index": index}
 
 
@@ -17,5 +17,5 @@ def aggregate_contract(contract, cache, key):
     if len(chunks) != contract["expected_chunk_count"]:
         raise ValueError("Cannot aggregate an incomplete contract")
     # Lossless ordered aggregation; do not guess domain-specific merge/deduplication rules.
-    return {"contract_id": contract["contract_id"], "version": contract["version"],
+    return {"contract_id": contract["contract_id"], "contract_version": contract["contract_version"],
             "chunk_count": len(chunks), "chunks": chunks}

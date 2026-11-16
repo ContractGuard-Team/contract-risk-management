@@ -103,9 +103,10 @@ class PromptAndReflectionTests(unittest.TestCase):
             agent.lessons.propose(agent.agent_id, ["Chờ duyệt"])
             messages = agent.build_messages(AgentRequest("contract"))
         system = [m["content"] for m in messages if m["role"] == "system"]
-        self.assertEqual(system[:2], ["Test instructions for prompts/core.md", "Test instructions for prompts/external.md"])
-        self.assertEqual(system[2], "# Examples\n\n## Example 1\nVí dụ một")
-        self.assertIn("Đã duyệt", system[3])
+        self.assertEqual(system[:3], ["Test instructions for prompts/soul.md", "Test instructions for prompts/core.md",
+                                      "Test instructions for prompts/external.md"])
+        self.assertEqual(system[3], "# Examples\n\n## Example 1\nVí dụ một")
+        self.assertIn("Đã duyệt", system[4])
         self.assertNotIn("Chờ duyệt", json.dumps(messages, ensure_ascii=False))
 
     def test_reflection_after_run_proposes_pending_lessons_used_after_approval(self):

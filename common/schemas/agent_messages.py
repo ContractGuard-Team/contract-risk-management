@@ -27,6 +27,7 @@ class ModelResult:
     text: str
     usage: dict[str, Any] = field(default_factory=dict)
     stop_reason: str = ""
+    tool_calls: list[dict[str, Any]] = field(default_factory=list)  # [{id, name, arguments (JSON string)}]
 
 
 @dataclass(frozen=True)

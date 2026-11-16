@@ -40,7 +40,7 @@ class WorkflowSteps:
                     snapshot = prior["memory"]
                 memory = create_contract_memory(self.policies[agent_id], self.summarizers[agent_id],
                                                 snapshot, self.counter)
-                manifest = ContractInput(contract["contract_id"], contract["version"],
+                manifest = ContractInput(contract["contract_id"], contract["contract_version"],
                                          [ContractChunk(**item) for item in contract["chunks"]],
                                          contract["expected_chunk_count"], contract["context"])
                 request = build_chunk_request(manifest, index)

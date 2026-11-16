@@ -151,5 +151,17 @@ class OutputFormatTests(unittest.TestCase):
                           failed["langfuse.observation.status_message"]), ("span", "ERROR", "ValueError"))
 
 
+class ServiceObserverProgressTests(unittest.TestCase):
+    def test_reflect_spans_do_not_move_stage_backwards(self):
+        from monitoring.service_observer import ServiceObserver
+        seen = []
+        observer = ServiceObserver("langgraph", {"job_id": "j"}, lambda stage, pct: seen.append(stage))
+        with patch("monitoring.service_observer.emit"):
+            for name in ("agent_1_classification.chunk", "agent_3_recommendation.run", "agent_1_classification.reflect"):
+                with observer.span(name):
+                    pass
+        self.assertEqual(seen, ["agent_1", "agent_3"])
+
+
 if __name__ == "__main__":
     unittest.main()

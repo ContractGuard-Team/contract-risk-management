@@ -76,7 +76,8 @@ def main():
            "WORKER_LANGGRAPH_URL":"http://langgraph:8000", "WORKER_DYNAMODB_TABLE":"smoke-jobs",
            "WORKER_DYNAMODB_EVENTS_TABLE":"smoke-events", "DATA_DIR":"/tmp/worker-smoke-data",
            "WORKER_OUTPUT_BUCKET":"smoke-output", "WORKER_INPUT_BUCKET":"smoke-input",
-           "WORKER_SHUTDOWN_SECONDS":"5", "MONITORING_URL":"http://monitoring:8000"}
+           "WORKER_SHUTDOWN_SECONDS":"5", "MONITORING_URL":"http://monitoring:8000",
+           "WORKER_RESULTS_QUEUE_URL":""}  # internal message format; .env may enable ContractGuard mode
     process = None
     monitor_process = None
     log_path = Path("/tmp/worker-smoke.log")
@@ -97,7 +98,7 @@ def main():
         env["WORKER_SQS_QUEUE_URL"] = queue
         job_id = "smoke-" + run_id
         current_key = {"job_id":"contract:contract-"+run_id}
-        body = json.dumps({"job_id":job_id,"contract_id":"contract-"+run_id,"s3_bucket":"smoke-input","s3_key":filename,
+        body = json.dumps({"job_id":job_id,"contract_id":"contract-"+run_id,"bucket":"smoke-input","source_file_key":filename,
                           "options":{"max_tokens":120,"min_tokens":20,"overlap_tokens":0},
                           "extraction":{"ocr":"auto","languages":"vie+eng"},
                           "context":{"handoff_probe":run_id}})
@@ -182,7 +183,7 @@ def main():
                     store = ContractJobStore(DynamoTables("smoke-jobs","smoke-events","ap-southeast-1",
                         client=session.client("dynamodb", endpoint_url=env["AWS_ENDPOINT_URL"])))
                     probe_job = QueueJob.from_body({"job_id":"probe-"+run_id,"contract_id":"probe-contract-"+run_id,
-                        "s3_bucket":"smoke-input","s3_key":filename})
+                        "bucket":"smoke-input","source_file_key":filename})
                     probe = store.reserve(probe_job)
                     store.claim(probe_job.job_id, probe["runtime_id"], "probe-owner", 180)
                     store.bind_input(probe_job.job_id,"probe-owner","a"*64)

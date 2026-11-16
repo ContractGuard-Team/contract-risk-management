@@ -121,8 +121,8 @@ def build_chunks(sections, job, document, count, warnings):
             index = len(chunks)
             spans = _source_spans(blocks, document)
             chunks.append({
-                "chunk_id": f"{job.contract_id}::v{job.version}::c{index:04d}",
-                "contract_id": job.contract_id, "version": job.version, "chunk_index": index,
+                "chunk_id": f"{job.contract_id}::v{job.contract_version}::c{index:04d}",
+                "contract_id": job.contract_id, "contract_version": job.contract_version, "chunk_index": index,
                 "text": text, "token_count": count(text), "heading_path": section.heading_path[:],
                 "articles": section.labels[:], "part_index": part, "part_count": len(groups),
                 "content_hash": hashlib.sha256(text.encode("utf-8")).hexdigest(),

@@ -24,7 +24,7 @@ from input_processing import process_job, RetrievedFile
 path = Path("uploads/contract.pdf")
 file = RetrievedFile(path.read_bytes(), path.name, {"type": "local"})
 result = process_job({
-    "job_id": "preprocess-001", "contract_id": "HD-001", "version": "1",
+    "job_id": "preprocess-001", "contract_id": "HD-001", "contract_version": "1",
     "extraction": {"ocr": "auto", "languages": "vie+eng"},
     "options": {"max_tokens": 512, "overlap_tokens": 64},
 }, file=file)
@@ -44,7 +44,7 @@ Job text có `contract_id`, `job_id`, `text`, options tùy chọn. Với API Pyt
 `file=` hoặc `text`, không truyền `source`. CLI hỗ trợ `source.type=local` để nạp file
 trước khi gọi module; `source.type=s3` báo lỗi, không có kết nối ngầm.
 
-Output giữ `job_id`, `contract_id`, `version`, `status`, `document`, `source_hash`,
+Output giữ `job_id`, `contract_id`, `contract_version`, `status`, `document`, `source_hash`,
 `extraction`, `stats`, `warnings`, `cleaned_text` và `chunks`. Mỗi chunk giữ ID/index,
 tổng chunk, text, token_count/method, heading_path, pages, source_spans và metadata file.
 Trường `error`/chunks rỗng báo thất bại; không được coi là hợp đồng đã phân tích.

@@ -13,7 +13,7 @@ class RecommendationAgent(BaseAgent):
     output_type = RecommendationOutput
     tool_functions = {"qdrant_search": qdrant_search, "legal_reference": legal_reference, "clause_rewriter": clause_rewriter,
                       **{name: external_tool(name) for name in ("web_search", "postgres_query", "s3_get_object", "s3_list_objects", "qdrant_collection_info",
-                                                       "supabase_select", "supabase_list_tables")}}
+                                                       "supabase_select", "supabase_list_tables", "partner_document")}}
 
     def build_context(self, request):
         return build_context(request)

@@ -15,7 +15,7 @@ def build_chunk_request(contract: ContractInput, index: int) -> ClassificationIn
     chunk = contract.chunks[index]
     context = deepcopy(contract.context)
     context["workflow"] = {
-        "contract_id": contract.contract_id, "version": contract.version,
+        "contract_id": contract.contract_id, "contract_version": contract.contract_version,
         "chunk_id": chunk.chunk_id, "chunk_index": chunk.index,
         "chunk_count": contract.expected_chunk_count,
         "source_metadata": deepcopy(chunk.metadata),

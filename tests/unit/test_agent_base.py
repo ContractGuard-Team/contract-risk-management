@@ -73,7 +73,7 @@ class FakeProvider:
         return ModelResult("result", {"prompt_tokens": 1}, "stop")
 
 
-PROMPTS = ("prompts/core.md", "prompts/external.md")
+PROMPTS = ("prompts/soul.md", "prompts/core.md", "prompts/external.md")
 
 
 @contextmanager
@@ -89,6 +89,86 @@ def configured_agents(provider):
         yield agents
 
 
+def tool_completion(*calls):
+    """ChatCompletion asking for tools: calls = (id, name, arguments JSON)."""
+    message = SimpleNamespace(content=None, tool_calls=[
+        SimpleNamespace(id=i, function=SimpleNamespace(name=n, arguments=a)) for i, n, a in calls])
+    return SimpleNamespace(choices=[SimpleNamespace(finish_reason="tool_calls", message=message)],
+                           usage=FakeUsage({"prompt_tokens": 5, "completion_tokens": 1}))
+
+
+class ScriptedClient(FakeClient):
+    def __init__(self, responses):
+        super().__init__()
+        self.responses = list(responses)
+
+    def create(self, **kwargs):
+        self.requests.append(deepcopy(kwargs))
+        return self.responses.pop(0)
+
+
+def bind_tool(agent, name, handler):
+    agent.tools.register(name, handler)
+    agent.tools.spec_loader = lambda: {name: {"type": "function", "function": {
+        "name": name, "description": "test", "parameters": {"type": "object"}}}}
+
+
+class ToolLoopTests(unittest.TestCase):
+    def test_model_calls_tool_then_answers_with_its_evidence(self):
+        searched = []
+        client = ScriptedClient([tool_completion(("c1", "legal_search", '{"query": "phạt vi phạm"}')),
+                                 completion('{"verdict": "confirmed", "evidence_gaps": []}')])
+        with configured_agents(OpenAIChatClient(SETTINGS, client)) as agents:
+            agent = agents["agent_2_risk_scoring"]
+            bind_tool(agent, "legal_search", lambda p: searched.append(p) or {"evidence": [{"citation": "Điều 418"}]})
+            result = agent.run(AgentRequest("contract"))
+        self.assertEqual(searched, [{"query": "phạt vi phạm"}])
+        self.assertEqual(client.requests[0]["tools"][0]["function"]["name"], "legal_search")
+        tool_message = client.requests[1]["messages"][-1]
+        self.assertEqual((tool_message["role"], tool_message["tool_call_id"]), ("tool", "c1"))
+        self.assertIn("Điều 418", tool_message["content"])
+        self.assertEqual(client.requests[1]["messages"][-2]["tool_calls"][0]["function"]["name"], "legal_search")
+        self.assertEqual(json.loads(result.text)["verdict"], "confirmed")
+        self.assertEqual(result.usage["prompt_tokens"], 7)  # both model calls billed
+
+    def test_evidence_gaps_trigger_new_search_and_reevaluation(self):
+        client = ScriptedClient([completion('{"evidence_gaps": ["Điều 3: chưa có căn cứ phạt"]}'),
+                                 tool_completion(("c2", "web_search", '{"query": "mức phạt vi phạm hợp đồng"}')),
+                                 completion('{"evidence_gaps": []}')])
+        with configured_agents(OpenAIChatClient(SETTINGS, client)) as agents:
+            agent = agents["agent_2_risk_scoring"]
+            bind_tool(agent, "web_search", lambda p: {"results": [{"url": "https://vbpl.vn/x"}]})
+            result = agent.run(AgentRequest("contract"))
+        self.assertEqual(json.loads(result.text), {"evidence_gaps": []})
+        retry = client.requests[1]["messages"][-1]
+        self.assertEqual(retry["role"], "user")
+        self.assertIn("Điều 3: chưa có căn cứ phạt", retry["content"])
+
+    def test_gaps_stay_after_reevaluation_budget_and_tool_errors_reach_the_model(self):
+        gap = completion('{"evidence_gaps": ["thiếu căn cứ"]}')
+        client = ScriptedClient([tool_completion(("c1", "legal_search", "{}")), gap, gap, gap])
+        def broken(_):
+            raise IntegrationNotConfigured("TODO: set QDRANT_URL")
+        with configured_agents(OpenAIChatClient(SETTINGS, client)) as agents:
+            agent = agents["agent_3_recommendation"]
+            bind_tool(agent, "legal_search", broken)
+            agent.tool_functions = {**agent.tool_functions, "legal_search": agent.tool_functions["qdrant_search"]}
+            result = agent.run(AgentRequest("contract"))
+        self.assertIn("IntegrationNotConfigured", client.requests[1]["messages"][-1]["content"])
+        self.assertEqual(len(client.requests), 4)  # first pass + 2 re-evaluations, then the honest gap is kept
+        self.assertEqual(json.loads(result.text)["evidence_gaps"], ["thiếu căn cứ"])
+
+    def test_tool_budget_forces_final_answer(self):
+        loop = [tool_completion((f"c{i}", "legal_search", "{}")) for i in range(6)]
+        client = ScriptedClient([*loop, completion('{"evidence_gaps": []}')])
+        with configured_agents(OpenAIChatClient(SETTINGS, client)) as agents:
+            agent = agents["agent_2_risk_scoring"]
+            bind_tool(agent, "legal_search", lambda p: {"evidence": []})
+            agent.run(AgentRequest("contract"))
+        self.assertEqual(client.requests[-1]["tool_choice"], "none")
+        self.assertNotIn("tool_choice", client.requests[0])
+
+
 class AgentBaseTests(unittest.TestCase):
     def test_creation_does_not_require_openai_sdk_or_key(self):
         with patch.dict(os.environ, {}, clear=True), patch.dict("sys.modules", {"openai": None}):
@@ -96,12 +176,32 @@ class AgentBaseTests(unittest.TestCase):
             self.assertEqual(len(agents), 3)
             self.assertTrue(all(agent.provider._client is None for agent in agents.values()))
 
-    def test_placeholder_instructions_stop_all_agents_before_model_call(self):
-        provider = FakeProvider()
-        for agent in create_agents(provider=provider).values():
-            with self.subTest(agent=agent.agent_id), self.assertRaises(ConfigurationError):
-                agent.run(AgentRequest("contract"))
-        self.assertEqual(provider.calls, [])
+    def test_source_prompts_are_filled_and_loaded_in_order(self):
+        from agents.hermes.config_loader import load_prompts
+        for agent in create_agents(provider=FakeProvider()).values():
+            with self.subTest(agent=agent.agent_id):
+                prompts = load_prompts(agent.directory)
+                self.assertTrue(all(prompts[key] for key in ("soul", "core", "external")))
+                system = [m["content"] for m in agent.build_messages(AgentRequest("contract")) if m["role"] == "system"]
+                self.assertEqual(system[:3], [prompts["soul"], prompts["core"], prompts["external"]])
+                self.assertIn("schema output được thiết kế trong source code", prompts["core"])
+        agents = create_agents(provider=FakeProvider())
+        self.assertGreaterEqual(len(load_prompts(agents["agent_1_classification"].directory)["examples"]), 10)
+        rules = load_prompts(agents["agent_2_risk_scoring"].directory)["rules"]
+        self.assertEqual([name for name, _ in rules], ["risk_policy.json"])
+        self.assertEqual(json.loads(rules[0][1])["policy_version"], "1.2.2")
+        self.assertIn("partner_document", load_prompts(agents["agent_3_recommendation"].directory)["external"])
+
+    def test_rules_and_output_schema_become_system_messages(self):
+        with configured_agents(FakeProvider()) as agents:
+            agent = agents["agent_2_risk_scoring"]
+            (agent.directory / "prompts/rules").mkdir(parents=True)
+            (agent.directory / "prompts/rules/policy.json").write_text('{"rules": []}', encoding="utf-8")
+            (agent.directory / "schemas").mkdir()
+            (agent.directory / "schemas/output.schema.json").write_text('{"type": "object"}', encoding="utf-8")
+            system = [m["content"] for m in agent.build_messages(AgentRequest("contract")) if m["role"] == "system"]
+        self.assertEqual(system[3], '# Rules: policy.json\n{"rules": []}')
+        self.assertTrue(system[4].startswith("# Output schema") and system[4].endswith('{"type": "object"}'))
 
     def test_each_instruction_file_is_required(self):
         provider = FakeProvider()
@@ -128,8 +228,10 @@ class AgentBaseTests(unittest.TestCase):
         self.assertNotIn("max_completion_tokens", client.requests[1])
         for request in client.requests:
             self.assertEqual(request["model"], "test-model")
-            core, external = request["messages"][:2]
-            self.assertEqual((core["role"], external["role"]), ("system", "system"))
+            soul, core, external = request["messages"][:3]
+            self.assertEqual((soul["role"], core["role"], external["role"]), ("system", "system", "system"))
+            self.assertNotIn("tools", request)  # no MCP bound: plain single call
+            self.assertEqual(soul["content"], "Test instructions for prompts/soul.md")
             self.assertEqual(core["content"], "Test instructions for prompts/core.md")
             self.assertEqual(external["content"], "Test instructions for prompts/external.md")
         body = first_user(client.requests[2])

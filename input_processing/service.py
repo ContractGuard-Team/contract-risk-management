@@ -40,7 +40,7 @@ def handler(payload, progress, guard):
         key: result[key] for key in ("document", "stats", "warnings", "source_hash", "extraction")}}
     chunks = [ContractChunk(c["chunk_id"], c["chunk_index"], c["text"],
                             {k: v for k, v in c.items() if k != "text"}) for c in result["chunks"]]
-    contract = ContractInput(result["contract_id"], result["version"], chunks, len(chunks), context)
+    contract = ContractInput(result["contract_id"], result["contract_version"], chunks, len(chunks), context)
     contract.validate()
     progress("processing", 95)
     return {"contract": asdict(contract), "stats": result["stats"], "warnings": result["warnings"]}

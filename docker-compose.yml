@@ -25,6 +25,7 @@ services:
       WORKER_INPUT_PROCESSING_URL: http://input-processing:8000
       WORKER_LANGGRAPH_URL: http://langgraph:8000
       WORKER_SQS_QUEUE_URL: ${WORKER_SQS_QUEUE_URL:-}
+      WORKER_RESULTS_QUEUE_URL: ${WORKER_RESULTS_QUEUE_URL:-}
       WORKER_DYNAMODB_TABLE: ${WORKER_DYNAMODB_TABLE:-contract-risk-jobs}
       WORKER_DYNAMODB_EVENTS_TABLE: ${WORKER_DYNAMODB_EVENTS_TABLE:-contract-risk-job-events}
       WORKER_INPUT_BUCKET: ${WORKER_INPUT_BUCKET:-}
@@ -427,6 +428,9 @@ services:
       HF_HUB_DISABLE_TELEMETRY: '1'
       POSTGRES_DSN: ${POSTGRES_DSN:-}
       MCP_S3_BUCKETS: ${MCP_S3_BUCKETS:-}
+      # Agent 3 partner_document: ContractGuard's bucket (read-only); binary files are extracted by input-processing.
+      PARTNER_S3_BUCKET: ${WORKER_INPUT_BUCKET:-}
+      INPUT_PROCESSING_URL: http://input-processing:8000
       TAVILY_SEARCH_DEPTH: ${TAVILY_SEARCH_DEPTH:-basic}
       TAVILY_COUNTRY: ${TAVILY_COUNTRY-vietnam}
     networks:

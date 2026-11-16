@@ -12,7 +12,7 @@ from common.service_http import serve, read_json
 from common.service_jobs import job_app
 from agents.hermes.agent_factory import create_agent, AGENT_TYPES
 from agents.memory import LONG_TERM_PROMPT, SHORT_TERM_PROMPT
-from agents.hermes.config_loader import CORE_PROMPT, EXTERNAL_PROMPT, load_prompts, prompt_files
+from agents.hermes.config_loader import REQUIRED, load_prompts, prompt_files
 from agents.hermes.context_budget import MemoryPolicy
 from agents.memory.short_term import create_contract_memory
 from agents.hermes.summarizer import ModelMemorySummarizer
@@ -22,7 +22,7 @@ class FixtureProvider:
     """Opt-in transport test fixture. Never selected as a fallback for OpenAI errors."""
     settings = OpenAISettings("transport-fixture")
 
-    def generate(self, messages, *, inference_config=None):
+    def generate(self, messages, *, inference_config=None, tools=None, tool_choice=None):
         if not all(isinstance(m, dict) and m.get("role") in ("system", "user", "assistant")
                    and isinstance(m.get("content"), str) for m in messages):
             raise ValueError("Messages are not in OpenAI chat format")
@@ -52,7 +52,7 @@ class AgentRuntime:
             # Test instructions live only in /tmp. Source prompts/plans are untouched.
             self.fixture_directory = TemporaryDirectory(prefix=agent_id)
             directory = Path(self.fixture_directory.name)
-            for relative in (CORE_PROMPT, EXTERNAL_PROMPT):
+            for _, relative in REQUIRED:
                 path = directory / relative
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text("Local transport fixture; no business analysis.", encoding="utf-8")

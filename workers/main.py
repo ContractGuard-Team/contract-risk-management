@@ -54,9 +54,15 @@ def intake_process(settings, requests, responses, stop):
     channel = ProgressChannel(requests, responses, settings.ack_timeout)
     processor = ProcessingServiceClient(settings.input_processing_url, token=settings.service_token, timeout=settings.http_timeout)
     workflow = WorkflowServiceClient(settings.langgraph_url, token=settings.service_token, timeout=settings.http_timeout)
+    storage = S3Client(region=settings.region)
+    partner = None
+    if settings.results_queue_url:  # ContractGuard protocol (requests/results queues, keys from request.json)
+        from workers.partner import PartnerProtocol
+        partner = PartnerProtocol(SQSClient(settings.results_queue_url, region=settings.region), storage,
+                                  settings.input_bucket)
     worker = IntakeWorker(SQSClient(settings.queue_url, region=settings.region),
-                          make_store(settings),
-                          S3Client(region=settings.region), channel.send, settings, processor=processor, workflow=workflow)
+                          make_store(settings), storage, channel.send, settings,
+                          processor=processor, workflow=workflow, partner=partner)
     try:
         worker.serve(stop)
     finally:

@@ -2,6 +2,7 @@
 import time
 from uuid import uuid4
 from botocore.exceptions import ClientError
+from workers.contracts import SourceError
 
 
 def conditional_failure(exc):
@@ -28,9 +29,9 @@ class JobStore:
                 raise
         existing = self.client.get(job.job_id)
         if not existing or existing["fingerprint"] != job.fingerprint:
-            raise ValueError("job_id already exists with different input; submit a new job_id")
+            raise SourceError("job_id already exists with different input; submit a new job_id")
         if job.runtime_id is not None and existing["runtime_id"] != job.runtime_id:
-            raise ValueError("job_id already belongs to another runtime_id")
+            raise SourceError("job_id already belongs to another runtime_id")
         return existing
 
     def claim(self, job_id, runtime_id, owner, lease_seconds):

@@ -7,7 +7,7 @@ ToolHandler = Callable[[dict], dict]
 
 # Tools served by the MCP gateway (mcp_server/); only Agent 2/3 list them.
 MCP_TOOLS = ("legal_search", "web_search", "qdrant_search", "postgres_query", "s3_get_object", "s3_list_objects", "qdrant_collection_info",
-             "supabase_select", "supabase_list_tables")
+             "supabase_select", "supabase_list_tables", "partner_document")
 
 # Agent tool name -> MCP tool when they differ (Agent 3 asks for "legal_reference", served by the RAG tool).
 MCP_ALIASES = {"legal_reference": "legal_search"}

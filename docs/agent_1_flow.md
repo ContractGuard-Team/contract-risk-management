@@ -11,7 +11,7 @@ LangGraph (orchestration/workflow.py)
     ├─ cache hit (cùng scope) → bỏ qua, không gọi model
     ├─ i = 0 → memory rỗng (contract mới không mang context cũ)
     ├─ i > 0 → khôi phục memory từ row cache của chunk i-1, bắt buộc scope khớp
-    │          contract_id/version/chunk_id/chunk_index; sai/thiếu → ValueError, không gọi model
+    │          contract_id/contract_version/chunk_id/chunk_index; sai/thiếu → ValueError, không gọi model
     ├─ RPC agent-1 với memory snapshot → AgentResult + memory mới
     └─ ghi MỘT row: {scope, result, memory}  (atomic, resume không thấy result thiếu memory)
   aggregate
@@ -21,7 +21,7 @@ LangGraph (orchestration/workflow.py)
   evaluate → Agent 2 nhận context.workflow.classification = bản tổng hợp
 ```
 
-- Memory Agent 1 tồn tại suốt các chunk của **một** contract (key cache = job_id + contract_id + version)
+- Memory Agent 1 tồn tại suốt các chunk của **một** contract (key cache = job_id + contract_id + contract_version)
   và chỉ bị xóa sau khi bản tổng hợp đã lưu và đọc lại được. Lỗi giữa chừng → memory các chunk
   đã xử lý vẫn còn để resume (test `test_failure_resume_uses_durable_results_and_memory`).
 - Agent container không giữ memory giữa các job: mỗi RPC dựng ContextEngine từ snapshot gửi kèm.

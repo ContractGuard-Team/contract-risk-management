@@ -13,7 +13,7 @@ from scripts.preprocess_contract import main
 
 
 def job(text, **options):
-    return {"contract_id": "HD-01", "job_id": "preprocess-01", "version": "2", "text": text,
+    return {"contract_id": "HD-01", "job_id": "preprocess-01", "contract_version": "2", "text": text,
             "options": {"max_tokens": 128, "overlap_tokens": 0, "min_tokens": 0, **options}}
 
 
@@ -28,7 +28,7 @@ class PreprocessingTests(unittest.TestCase):
     def test_invalid_jobs_and_option_types_return_error(self):
         invalid = [None, [], {}, job(""), {**job("text"), "contract_id": []},
                    {**job("text"), "options": []}, {**job("text"), "options": "x"},
-                   {**job("text"), "command": "delete"}, {**job("text"), "version": None},
+                   {**job("text"), "command": "delete"}, {**job("text"), "contract_version": None},
                    {**job("text"), "job_id": ""}, {**job("text"), "source_metadata": []},
                    job("text", max_tokens="512"), job("text", max_tokens=True),
                    job("text", overlap_tokens=-1), job("text", overlap_tokens=64),
@@ -110,7 +110,7 @@ class PreprocessingTests(unittest.TestCase):
         for index, chunk in enumerate(result["chunks"]):
             self.assertEqual(chunk["chunk_index"], index)
             self.assertEqual(chunk["total_chunks"], len(result["chunks"]))
-            self.assertEqual(chunk["version"], result["version"])
+            self.assertEqual(chunk["contract_version"], result["contract_version"])
             self.assertEqual(chunk["contract_id"], result["contract_id"])
 
     def test_counter_failures_are_explicit(self):

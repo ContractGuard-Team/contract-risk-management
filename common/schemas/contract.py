@@ -18,14 +18,14 @@ class ContractChunk:
 @dataclass(frozen=True)
 class ContractInput:
     contract_id: str
-    version: str
+    contract_version: str
     chunks: list[ContractChunk]
     expected_chunk_count: int
     context: dict = field(default_factory=dict)
 
     def validate(self):
-        if not all(isinstance(v, str) and v.strip() for v in (self.contract_id, self.version)):
-            raise ValueError("contract_id and version are required")
+        if not all(isinstance(v, str) and v.strip() for v in (self.contract_id, self.contract_version)):
+            raise ValueError("contract_id and contract_version are required")
         if type(self.expected_chunk_count) is not int or self.expected_chunk_count < 1:
             raise ValueError("expected_chunk_count must be positive")
         if len(self.chunks) != self.expected_chunk_count:

@@ -71,7 +71,7 @@ class RetryAndResumeTests(unittest.TestCase):
             self.assertIsNone(flow.checkpointer.get_tuple({"configurable": {"thread_id": key}}))
             before = len(provider.calls)
             result = flow.run_contract(contract(3), job_id="resume2")
-            self.assertEqual(provider.calls[before:], ["contract:contract-a version:v1"] * 2)  # Agent 2, Agent 3 only
+            self.assertEqual(provider.calls[before:], ["contract:contract-a contract_version:v1"] * 2)  # Agent 2, Agent 3 only
             self.assertEqual(result["status"], "completed")
             self.assertIsNone(flow.checkpointer.get_tuple({"configurable": {"thread_id": key}}))
             flow.cache.close()

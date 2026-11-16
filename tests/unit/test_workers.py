@@ -27,8 +27,8 @@ from workers.settings import WorkerSettings
 
 
 REGION = "us-east-1"
-BODY = {"job_id": "job-test", "contract_id": "contract-test", "s3_bucket": "input-contracts",
-        "s3_key": "contracts/test.txt", "metadata": {"tenant": "demo", "score": 1.5}}
+BODY = {"job_id": "job-test", "contract_id": "contract-test", "bucket": "input-contracts",
+        "source_file_key": "contracts/test.txt", "metadata": {"tenant": "demo", "score": 1.5}}
 
 
 def table_client():
@@ -77,7 +77,7 @@ class WorkerAWSTests(unittest.TestCase):
         self.s3 = boto3.client("s3", region_name=REGION)
         for bucket in ("input-contracts", "output-contracts"):
             self.s3.create_bucket(Bucket=bucket)
-        self.s3.put_object(Bucket="input-contracts", Key=BODY["s3_key"], Body=b"Article 1. Payment\nPay within thirty days.")
+        self.s3.put_object(Bucket="input-contracts", Key=BODY["source_file_key"], Body=b"Article 1. Payment\nPay within thirty days.")
         self.storage = S3Client(client=self.s3)
         self.sqs = boto3.client("sqs", region_name=REGION)
         url = self.sqs.create_queue(QueueName="contracts")["QueueUrl"]
@@ -150,7 +150,7 @@ class WorkerAWSTests(unittest.TestCase):
         job = QueueJob.from_body(BODY)
         first = self.store.reserve(job)
         self.assertEqual(self.store.reserve(job)["runtime_id"], first["runtime_id"])
-        for changes in ({"runtime_id": "different"}, {"s3_key": "different.txt"}, {"contract_id": "changed"}):
+        for changes in ({"runtime_id": "different"}, {"source_file_key": "different.txt"}, {"contract_id": "changed"}):
             with self.subTest(changes=changes), self.assertRaises(ValueError):
                 self.store.reserve(QueueJob.from_body({**BODY, **changes}))
         supplied = QueueJob.from_body({**BODY, "job_id": "provided", "runtime-id": "user-runtime"})
@@ -203,14 +203,14 @@ class WorkerAWSTests(unittest.TestCase):
         worker, message = self.worker(), self.message()
         with patch.object(self.storage, "write_json", side_effect=IOError("simulated")), self.assertRaises(IOError):
             worker.handle(message)
-        self.s3.put_object(Bucket="input-contracts", Key=BODY["s3_key"], Body=b"Changed contract")
+        self.s3.put_object(Bucket="input-contracts", Key=BODY["source_file_key"], Body=b"Changed contract")
         with patch.object(self.queue, "delete") as deleted, self.assertRaises(ValueError):
             worker.handle(message)
         deleted.assert_not_called()
         self.assertEqual(len(self.submissions), 1)
 
     def test_empty_document_retains_message(self):
-        self.s3.put_object(Bucket="input-contracts", Key=BODY["s3_key"], Body=b"")
+        self.s3.put_object(Bucket="input-contracts", Key=BODY["source_file_key"], Body=b"")
         with patch.object(self.queue, "delete") as deleted, self.assertRaises(ValueError):
             self.worker().handle(self.message())
         deleted.assert_not_called()
@@ -284,11 +284,12 @@ class WorkerAWSTests(unittest.TestCase):
 
 class WorkerBoundaryTests(unittest.TestCase):
     def test_payload_validation_and_bucket_default(self):
-        job = QueueJob.from_body({"job_id": "a", "contract_id": "b", "s3_key": "x.pdf"}, default_bucket="uploads")
+        job = QueueJob.from_body({"job_id": "a", "contract_id": "b", "source_file_key": "x.pdf"}, default_bucket="uploads")
         self.assertEqual(job.source["bucket"], "uploads")
         for changes in ({"runtime_id": ""}, {"runtime_id": "a", "runtime-id": "b"},
-                        {"context": {"worker": {}}}, {"job_id": ""}, {"s3_key": "no.exe"},
-                        {"metadata": "x" * 33000}, {"source": {"type": "local", "path": "x.txt"}}):
+                        {"context": {"worker": {}}}, {"job_id": ""}, {"source_file_key": "no.exe"},
+                        {"metadata": "x" * 33000}, {"bucket": ""}, {"source_file_key": None},
+                        {"contract_version": None}):
             with self.subTest(changes=changes), self.assertRaises(ValueError):
                 QueueJob.from_body({**BODY, **changes})
 

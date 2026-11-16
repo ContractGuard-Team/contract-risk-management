@@ -34,7 +34,7 @@ class Job:
     contract_id: str
     text: str
     job_id: str
-    version: str = "1"
+    contract_version: str = "1"
     command: str = "preprocess"
     options: ChunkOptions = field(default_factory=ChunkOptions)
     source_metadata: dict = field(default_factory=dict)

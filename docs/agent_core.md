@@ -1,22 +1,52 @@
-# Core agent: memory 2 loại + prompt 3 loại (2026-11-14)
+# Core agent: memory 2 loại + prompt (2026-11-14, cập nhật 2026-11-17)
 
-Áp dụng cho cả ba agent (`agents/base.py`). Mọi file prompt đang **để trống** để điền sau; `core.md` và `external.md`
-rỗng thì agent báo `ConfigurationError: TODO: fill ...` và không gọi model (readiness not ready).
+Áp dụng cho cả ba agent (`agents/base.py`). `soul.md`, `core.md`, `external.md` rỗng thì agent báo
+`ConfigurationError: TODO: fill ...` và không gọi model (readiness not ready).
 
-## Prompt (mỗi agent: `agents/<agent>/prompts/`)
+## Prompt (mỗi agent: `agents/<agent>/prompts/`) — đã điền ngày 2026-11-17
 
 | Loại | File | Bắt buộc | Vai trò |
 | --- | --- | --- | --- |
-| Xử lý trung tâm | `core.md` | có | cách xử lý hợp đồng để ra output đúng nhất |
-| Xử lý ngoài luồng | `external.md` | có | khi nào dùng service bên ngoài (tool MCP: `legal_search`, `web_search`, S3/Supabase/Qdrant...) và cách dùng thông tin bổ sung qua context |
+| Soul | `soul.md` | có | vai trò + cách làm việc của agent (A1 phân điều khoản, A2 đánh giá rủi ro, A3 đề xuất sửa đổi) |
+| Xử lý hợp đồng (trung tâm) | `core.md` | có | cách xử lý hợp đồng + ràng buộc output theo schema trong source code |
+| Prompt service (ngoài luồng) | `external.md` | có | A1: vòng lặp chunk với cache; A2/A3: dùng tool MCP và đánh giá lại khi thiếu bằng chứng |
+| File luật | `rules/*.md|*.json` | không | file agent phải đối chiếu; nạp thành system `# Rules: <tên>` |
+| Schema output | `../schemas/output.schema.json` | không | **người dùng thiết kế sau**; khi có file thì nạp thành system `# Output schema` |
 | Example | `examples/*.md` | không | mỗi file một ví dụ; file rỗng bị bỏ qua; nạp theo thứ tự tên file |
 
-Thứ tự message gửi model: system `core` → system `external` → system `# Examples` (nếu có) → system bài học long term
-đã duyệt (nếu có) → lịch sử short term của hợp đồng này (ContextEngine) → user (request/context JSON).
-Đã xóa `prompts/system.md`, prompt tác vụ (`classify/evaluate/recommend.md`), `soul.md`, `constraints.md`,
-`context/instructions.md`. `plan.md` giữ làm tài liệu quy trình, **không** nạp vào prompt.
-Loader: `agents/hermes/config_loader.py` (`load_prompts`, `prompt_files`). Revision thực thi (cache/describe) băm
-mọi file prompt + config.yaml + 2 prompt memory.
+Thứ tự message gửi model: system `soul` → `core` → `external` → `# Rules: ...` → `# Output schema` (nếu có) →
+`# Examples` (nếu có) → bài học long term đã duyệt (nếu có) → lịch sử short term (ContextEngine) → user (request JSON).
+
+Nguồn nội dung (gói `ContractGuard_4_2-4_5_Package.zip`):
+- A1 `core.md` = phần "Áp dụng trong hệ thống" + nguyên văn `prompts/Extraction_Agent/01,02` (heading hạ cấp). Hệ thống
+  không có Bước 4.3 nên A1 tự tách điều khoản + gán category; `clause_id` = `<contract_id>-C<4 số>`.
+  `examples/` = 10 hợp đồng từ `json/` (HD-006/022/035/036/058/059/093/094/095/097), phủ đủ 11 category, mỗi mục ≤2
+  điều khoản rút gọn 220 ký tự; chỉ tham khảo cách tách, không phải định dạng output.
+- A2 `core.md` = phần "Áp dụng trong hệ thống" + nguyên văn `prompts/Risk_Agent/01,02`. `rules/risk_policy.json` =
+  `risk/risk_policy.json` nguyên bản (danh mục R01–R20, M01–M03): tạo candidate, chấm điểm, rồi đối chiếu để xác định loại
+  rủi ro. `examples/` = 3 báo cáo trong `risk/risk_rule_report.json` (HD-094 high, HD-072 medium, HD-002 low; ≤10 hit).
+  (`risk_rule_report.json` là kết quả chấm 100 hợp đồng mẫu, không phải danh mục luật — người dùng chọn dùng policy làm file luật.)
+- A3 viết mới theo yêu cầu: kết quả Agent 2 + tài liệu gốc S3 đối tác (`partner_document`) + Qdrant/Supabase.
+- Dung lượng system prompt: A1 ≈ 60 KB, A2 ≈ 55 KB, A3 ≈ 9 KB → `configs/memory.yaml` (max_input_tokens, còn TODO) phải
+  tính phần này.
+
+`plan.md` giữ làm tài liệu quy trình, **không** nạp vào prompt. Loader: `agents/hermes/config_loader.py`
+(`load_prompts`, `prompt_files`, `REQUIRED`). Revision thực thi (cache/describe) băm mọi file prompt/rules/schema +
+config.yaml + 2 prompt memory.
+
+## Vòng lặp gọi tool + đánh giá lại khi thiếu bằng chứng (`agents/base.py:run`)
+
+- Tool đưa cho model = các tool MCP đã bind (`bind_mcp_tools`); spec (tên, mô tả, JSON schema tham số) lấy từ
+  `list_tools` của MCP gateway ở lần gọi model đầu tiên (`ToolRegistry.spec_loader`), alias đổi tên (`legal_reference`).
+  Agent 1 không có tool → gọi model một lần như cũ (không gửi tham số `tools`).
+- OpenAI Chat Completions function calling: `finish_reason="tool_calls"` → chạy từng tool (`run_tool`, span `tool.*`) →
+  thêm message `tool` → gọi lại. Tối đa `MAX_TOOL_ROUNDS=6` vòng mỗi lượt đánh giá; hết thì gọi với `tool_choice="none"`.
+  Lỗi tool (chưa cấu hình, sai tham số, upstream lỗi) trả về cho model dưới dạng `{"error", "message"}`, không làm hỏng job.
+  Kết quả tool cắt ở 20.000 ký tự (dùng `offset` của tool để đọc tiếp).
+- Đánh giá lại: nếu câu trả lời cuối là JSON có khóa gốc `evidence_gaps` không rỗng → thêm yêu cầu tìm căn cứ cho đúng các
+  điểm đó và trả lại toàn bộ kết quả; tối đa `MAX_REEVALUATIONS=2` lần (mỗi lần có lại 6 vòng tool). Hết lượt thì giữ
+  nguyên gap (không bịa). **Schema output của Agent 2/3 phải có khóa gốc `evidence_gaps`** để cơ chế này hoạt động.
+- Usage cộng dồn mọi lần gọi model; memory short term chỉ ghi câu trả lời cuối (không ghi transcript tool).
 
 ## Memory — riêng cho từng agent, không có memory dùng chung
 

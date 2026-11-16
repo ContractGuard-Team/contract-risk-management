@@ -29,7 +29,7 @@ class OpenAIChatClient:
         self.settings = settings
         self._client = client
 
-    def generate(self, messages, *, inference_config=None):
+    def generate(self, messages, *, inference_config=None, tools=None, tool_choice=None):
         self.settings.validate()
         if self._client is None:
             try:
@@ -38,18 +38,25 @@ class OpenAIChatClient:
                 raise ConfigurationError("Install project dependencies to use OpenAI (openai)") from exc
             self._client = OpenAI(api_key=self.settings.api_key, timeout=120, max_retries=2)
         try:
+            extra = {"tools": deepcopy(tools)} if tools else {}
+            if tools and tool_choice:
+                extra["tool_choice"] = tool_choice
             response = self._client.chat.completions.create(model=self.settings.model, messages=deepcopy(messages),
-                                                            **deepcopy(inference_config or {}))
+                                                            **deepcopy(inference_config or {}), **extra)
         except Exception as exc:  # SDK errors propagate; never fabricate a successful result
             if transient(exc):
                 raise TransientModelError(f"OpenAI temporarily unavailable: {type(exc).__name__}") from exc
             raise
         choice = response.choices[0] if response.choices else None
         reason = (choice.finish_reason or "") if choice else ""
+        usage = response.usage.model_dump(exclude_none=True) if response.usage is not None else {}
+        if reason == "tool_calls" and tools and choice.message.tool_calls:
+            calls = [{"id": c.id, "name": c.function.name, "arguments": c.function.arguments or "{}"}
+                     for c in choice.message.tool_calls]
+            return ModelResult(choice.message.content or "", usage, reason, calls)
         if reason != "stop":
             raise ModelResponseError(f"OpenAI did not complete a text response: {reason}")
         text = choice.message.content or ""
         if not text.strip():
             raise ModelResponseError("OpenAI returned no text")
-        usage = response.usage.model_dump(exclude_none=True) if response.usage is not None else {}
         return ModelResult(text, usage, reason)

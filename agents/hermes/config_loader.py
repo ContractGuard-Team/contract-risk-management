@@ -47,10 +47,14 @@ def load_agent_config(directory: Path, env_prefix: str, settings=None) -> AgentC
     return AgentConfig(settings, configured)
 
 
-# The three prompt types of every agent (plan.md is process documentation and is NOT sent to the model).
+# Prompt types of every agent (plan.md is process documentation and is NOT sent to the model).
+SOUL_PROMPT = "prompts/soul.md"          # vai trò/tính cách của agent; nạp đầu tiên
 CORE_PROMPT = "prompts/core.md"          # xử lý trung tâm: how to process the contract into the right output
 EXTERNAL_PROMPT = "prompts/external.md"  # xử lý ngoài luồng: when to use external services / supplied context
 EXAMPLES_DIR = "prompts/examples"        # example_*.md: worked examples; optional, empty files are ignored
+RULES_DIR = "prompts/rules"              # reference rule files (*.md, *.json) the agent must check; optional
+OUTPUT_SCHEMA = "schemas/output.schema.json"  # output JSON schema written in source code; optional until designed
+REQUIRED = (("soul", SOUL_PROMPT), ("core", CORE_PROMPT), ("external", EXTERNAL_PROMPT))
 
 
 def _text(path):
@@ -60,18 +64,28 @@ def _text(path):
         raise ConfigurationError(f"TODO: provide {path}") from exc
 
 
+def _listed(directory: Path, folder: str, patterns) -> list[str]:
+    return sorted({p.relative_to(directory).as_posix() for pattern in patterns for p in (directory / folder).glob(pattern)})
+
+
 def prompt_files(directory: Path) -> list[str]:
-    """Relative paths of every prompt file (for execution revisions); examples in name order."""
-    examples = sorted(p.relative_to(directory).as_posix() for p in (directory / EXAMPLES_DIR).glob("*.md"))
-    return [CORE_PROMPT, EXTERNAL_PROMPT, *examples]
+    """Relative paths of every prompt file (for execution revisions); examples/rules in name order."""
+    optional = [OUTPUT_SCHEMA] if (directory / OUTPUT_SCHEMA).is_file() else []
+    return [*(relative for _, relative in REQUIRED), *_listed(directory, EXAMPLES_DIR, ["*.md"]),
+            *_listed(directory, RULES_DIR, ["*.md", "*.json"]), *optional]
 
 
 def load_prompts(directory: Path) -> dict:
-    """{"core", "external", "examples": [...]}. Core and external must be filled before any model call."""
+    """{"soul", "core", "external", "examples": [...], "rules": [(name, text)], "output_schema": str}.
+    Soul, core and external must be filled before any model call."""
     prompts = {}
-    for key, relative in (("core", CORE_PROMPT), ("external", EXTERNAL_PROMPT)):
+    for key, relative in REQUIRED:
         prompts[key] = _text(directory / relative)
         if not prompts[key]:
             raise ConfigurationError(f"TODO: fill {directory / relative}")
-    prompts["examples"] = [text for relative in prompt_files(directory)[2:] if (text := _text(directory / relative))]
+    prompts["examples"] = [text for relative in _listed(directory, EXAMPLES_DIR, ["*.md"])
+                           if (text := _text(directory / relative))]
+    prompts["rules"] = [(Path(relative).name, text) for relative in _listed(directory, RULES_DIR, ["*.md", "*.json"])
+                        if (text := _text(directory / relative))]
+    prompts["output_schema"] = _text(directory / OUTPUT_SCHEMA) if (directory / OUTPUT_SCHEMA).is_file() else ""
     return prompts

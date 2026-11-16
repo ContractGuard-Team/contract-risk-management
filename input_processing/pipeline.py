@@ -14,12 +14,12 @@ from input_processing.token_counter import checked_counter
 def process_job(job_dict: dict, token_counter=None, *, file=None, ocr_engine=None, limits=None) -> dict:
     """Return an error envelope for invalid jobs; unexpected programming/provider errors propagate."""
     data = job_dict if isinstance(job_dict, dict) else {}
-    envelope = {name: data.get(name) for name in ("job_id", "contract_id", "version")}
+    envelope = {name: data.get(name) for name in ("job_id", "contract_id", "contract_version")}
     envelope["command"] = data.get("command", "preprocess")
     try:
         limits = limits or ProcessingLimits()
         job = parse_job(job_dict, has_file=file is not None)
-        envelope.update(job_id=job.job_id, contract_id=job.contract_id, version=job.version)
+        envelope.update(job_id=job.job_id, contract_id=job.contract_id, contract_version=job.contract_version)
         if file is not None:
             if not isinstance(file, RetrievedFile):
                 raise JobError("file must be a RetrievedFile containing loaded bytes")

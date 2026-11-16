@@ -21,5 +21,8 @@ class SQSClient:
         self._connect().change_message_visibility(QueueUrl=self.queue_url,
             ReceiptHandle=receipt, VisibilityTimeout=seconds)
 
+    def send(self, body):
+        self._connect().send_message(QueueUrl=self.queue_url, MessageBody=body)
+
     def delete(self, receipt):
         self._connect().delete_message(QueueUrl=self.queue_url, ReceiptHandle=receipt)

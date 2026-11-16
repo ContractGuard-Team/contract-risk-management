@@ -1,0 +1,367 @@
+{
+  "policy_version": "1.2.2",
+  "status": "starter_uncalibrated",
+  "languages": [
+    "en",
+    "vi (starter)"
+  ],
+  "groups": [
+    {
+      "id": "phap_ly",
+      "name_vi": "Pháp lý"
+    },
+    {
+      "id": "tai_chinh",
+      "name_vi": "Tài chính"
+    },
+    {
+      "id": "van_hanh",
+      "name_vi": "Vận hành"
+    },
+    {
+      "id": "tuan_thu",
+      "name_vi": "Tuân thủ"
+    },
+    {
+      "id": "bao_mat",
+      "name_vi": "Bảo mật & hạn chế cạnh tranh"
+    },
+    {
+      "id": "ben_thu_ba",
+      "name_vi": "Bên thứ ba"
+    }
+  ],
+  "severity_points": {
+    "low": 2,
+    "medium": 5,
+    "high": 12
+  },
+  "repeat": {
+    "bonus": 0.5,
+    "cap": 3
+  },
+  "overall_levels": [
+    {
+      "min_points": 35,
+      "level": "high"
+    },
+    {
+      "min_points": 15,
+      "level": "medium"
+    },
+    {
+      "min_points": 0,
+      "level": "low"
+    }
+  ],
+  "group_levels": [
+    {
+      "min_points": 12,
+      "level": "high"
+    },
+    {
+      "min_points": 5,
+      "level": "medium"
+    },
+    {
+      "min_points": 0,
+      "level": "low"
+    }
+  ],
+  "scan_excluded_categories": [
+    "other"
+  ],
+  "matching": "NFKC + gộp khoảng trắng/xuống dòng, không phân biệt hoa/thường; hit đầu tiên hợp lệ của mỗi rule trên mỗi clause",
+  "rules": [
+    {
+      "id": "R03",
+      "name": "indemnification",
+      "group": "phap_ly",
+      "sev": "medium",
+      "cats": [
+        "breach_and_liabilities",
+        "rights_and_obligations",
+        "general_and_boilerplate",
+        "tax_and_compliance"
+      ],
+      "pat": "indemnif\\w*|\\b(?:hold(?:s|ing)?|held)\\b[^.]{0,40}\\bharmless|bồi thường|bồi hoàn",
+      "desc": "A party must indemnify or hold another party harmless."
+    },
+    {
+      "id": "R04",
+      "name": "unlimited_liability",
+      "group": "phap_ly",
+      "sev": "high",
+      "cats": [
+        "breach_and_liabilities",
+        "rights_and_obligations"
+      ],
+      "pat": "unlimited liability|liability[^.]{0,40}\\bunlimited|without (?:any )?(?:limit|cap)\\b|no (?:limit|cap) on (?:its |the |such )?liabilit\\w*|trách nhiệm (?:vô hạn|không giới hạn)|không giới hạn (?:mức )?trách nhiệm",
+      "desc": "Liability is stated as unlimited or without a cap.",
+      "negation_guard": true
+    },
+    {
+      "id": "R05",
+      "name": "liability_exclusion",
+      "group": "phap_ly",
+      "sev": "low",
+      "cats": [
+        "breach_and_liabilities",
+        "general_and_boilerplate"
+      ],
+      "pat": "(?:consequential|punitive|indirect|incidental|special|exemplary) damages|in no event[^.]{0,80}liable|thiệt hại (?:gián tiếp|đặc biệt|do hậu quả)",
+      "desc": "Clause excludes or limits liability for some kinds of damages."
+    },
+    {
+      "id": "R14",
+      "name": "arbitration_or_jury_waiver",
+      "group": "phap_ly",
+      "sev": "low",
+      "cats": [
+        "dispute_and_governing_law"
+      ],
+      "pat": "arbitrat|waive[^.]{0,60}jury|trọng tài",
+      "desc": "Disputes go to arbitration, or the right to a jury trial is waived."
+    },
+    {
+      "id": "R15",
+      "name": "exclusive_venue",
+      "group": "phap_ly",
+      "sev": "low",
+      "cats": [
+        "dispute_and_governing_law"
+      ],
+      "pat": "(?<!non-)(?<!non )\\bexclusive (?:venue|jurisdiction)|thẩm quyền độc quyền",
+      "desc": "Disputes are limited to an exclusive venue or jurisdiction."
+    },
+    {
+      "id": "R09",
+      "name": "acceleration",
+      "group": "tai_chinh",
+      "sev": "medium",
+      "cats": [
+        "breach_and_liabilities",
+        "rights_and_obligations"
+      ],
+      "pat": "\\baccelerat(?:e[ds]?|ion|ing)\\b|(?:immediately|forthwith)(?: be| become)? due and payable|due and payable (?:immediately|forthwith)|đến hạn thanh toán ngay|thanh toán ngay lập tức toàn bộ",
+      "desc": "Amounts may be accelerated or become immediately due.",
+      "skip_if_context_matches": "\\bvest"
+    },
+    {
+      "id": "R10",
+      "name": "penalty_or_forfeiture",
+      "group": "tai_chinh",
+      "sev": "medium",
+      "cats": [
+        "breach_and_liabilities",
+        "compensation_and_payment",
+        "term_and_termination",
+        "rights_and_obligations"
+      ],
+      "pat": "liquidated damages|penalt(?:y|ies)|forfeit\\w*|phạt vi phạm|tiền phạt|tịch thu|mất (?:tiền )?đặt cọc",
+      "desc": "Clause imposes liquidated damages, a penalty or a forfeiture.",
+      "skip_if_context_matches": "perjury"
+    },
+    {
+      "id": "R12",
+      "name": "severance_obligation",
+      "group": "tai_chinh",
+      "sev": "low",
+      "cats": [
+        "term_and_termination",
+        "compensation_and_payment"
+      ],
+      "pat": "severance|trợ cấp thôi việc|trợ cấp mất việc",
+      "desc": "Clause creates a severance payment obligation."
+    },
+    {
+      "id": "R06",
+      "name": "termination_without_cause",
+      "group": "van_hanh",
+      "sev": "medium",
+      "cats": [
+        "term_and_termination"
+      ],
+      "pat": "without cause|(?:may|right to|shall have the right to)[^.]{0,40}terminat\\w*[^.]{0,80}(?:for any reason|at any time|for convenience|at (?:its|his|her|their) (?:sole )?convenience)|at any time[^.,;]{0,40}(?:may|right to)[^.,;]{0,20}terminat\\w*|đơn phương chấm dứt|chấm dứt[^.]{0,40}bất (?:cứ )?lúc nào|không cần (?:nêu )?lý do",
+      "desc": "A party may terminate without cause or at any time.",
+      "negation_guard": true
+    },
+    {
+      "id": "R07",
+      "name": "auto_renewal",
+      "group": "van_hanh",
+      "sev": "medium",
+      "cats": [
+        "term_and_termination"
+      ],
+      "pat": "automatic(?:ally)?(?: be)? (?:renew|extend)|(?:renew|extend)\\w*[^.]{0,40}\\bautomatically|automatic renewal|\\bevergreen\\b|successive[^.]{0,40}(?:period|term)s?|tự động (?:gia hạn|kéo dài|tái tục)",
+      "desc": "The term renews or extends automatically.",
+      "negation_guard": true
+    },
+    {
+      "id": "R08",
+      "name": "sole_discretion",
+      "group": "van_hanh",
+      "sev": "low",
+      "cats": [
+        "preamble_and_scope",
+        "term_and_termination",
+        "compensation_and_payment",
+        "rights_and_obligations",
+        "confidentiality_and_ip",
+        "breach_and_liabilities",
+        "tax_and_compliance",
+        "force_majeure",
+        "dispute_and_governing_law",
+        "general_and_boilerplate"
+      ],
+      "pat": "\\b(?:sole|absolute)(?: and (?:absolute|exclusive))? discretion|toàn quyền quyết định",
+      "desc": "A party decides in its sole discretion."
+    },
+    {
+      "id": "R11",
+      "name": "change_in_control_trigger",
+      "group": "van_hanh",
+      "sev": "low",
+      "cats": [
+        "term_and_termination",
+        "compensation_and_payment",
+        "rights_and_obligations"
+      ],
+      "pat": "change (?:in|of) control|thay đổi quyền kiểm soát",
+      "desc": "A change of control triggers rights, payments or other consequences."
+    },
+    {
+      "id": "R16",
+      "name": "unilateral_amendment",
+      "group": "van_hanh",
+      "sev": "medium",
+      "cats": [
+        "general_and_boilerplate",
+        "rights_and_obligations"
+      ],
+      "pat": "(?:may|shall have the right to|reserves? the right to)[^.]{0,40}(?:amend|modify|change|revise)[^.]{0,80}(?:without (?:(?:the|any|prior|written|further|such) )*(?:(?:[\\w-]+ ){0,2}[\\w-]+['’]s? )?(?:consent|notice)|sole discretion)|unilaterally (?:amend|modify|change|revise)\\w*|đơn phương (?:sửa đổi|thay đổi)",
+      "desc": "A party may amend the terms unilaterally.",
+      "negation_guard": true
+    },
+    {
+      "id": "R13",
+      "name": "tax_gross_up",
+      "group": "tuan_thu",
+      "sev": "medium",
+      "cats": [
+        "tax_and_compliance",
+        "compensation_and_payment"
+      ],
+      "pat": "gross(?:ed)?[- ]?up\\b|additional amounts as may be necessary",
+      "desc": "A party must gross up payments for taxes."
+    },
+    {
+      "id": "R19",
+      "name": "compliance_obligation",
+      "group": "tuan_thu",
+      "sev": "low",
+      "cats": [
+        "tax_and_compliance",
+        "rights_and_obligations",
+        "breach_and_liabilities"
+      ],
+      "pat": "compl(?:y|ies|iance|ying) with[^.]{0,60}\\b(?:laws?|regulations?)\\b|violation of (?:any |all |applicable )*(?:laws?|regulations?)\\b|tuân thủ[^.]{0,60}(?:pháp luật|quy định)|vi phạm (?:pháp luật|quy định)",
+      "desc": "Clause requires compliance with laws or regulations, or addresses a violation."
+    },
+    {
+      "id": "R01",
+      "name": "non_compete",
+      "group": "bao_mat",
+      "sev": "medium",
+      "cats": [
+        "confidentiality_and_ip",
+        "rights_and_obligations"
+      ],
+      "pat": "non[- ]?compet(?:e|ition)\\b|(?:shall|will) not[^.]{0,120}\\bcompet(?:e|ing|ition)\\b|agrees? not to[^.]{0,80}\\bcompet(?:e|ing)\\b|không cạnh tranh|cấm cạnh tranh",
+      "desc": "Clause restricts a party from competing (non-compete)."
+    },
+    {
+      "id": "R02",
+      "name": "non_solicit",
+      "group": "bao_mat",
+      "sev": "low",
+      "cats": [
+        "confidentiality_and_ip",
+        "rights_and_obligations"
+      ],
+      "pat": "non[- ]?solicit\\w*|no[- ]solicit\\w*|(?:shall|will) not[^.]{0,80}solicit|agrees? not to[^.]{0,80}solicit|không lôi kéo|không (?:chào mời|dụ dỗ)",
+      "desc": "Clause restricts soliciting employees or customers."
+    },
+    {
+      "id": "R17",
+      "name": "confidentiality_obligation",
+      "group": "bao_mat",
+      "sev": "low",
+      "cats": [
+        "confidentiality_and_ip",
+        "rights_and_obligations",
+        "general_and_boilerplate"
+      ],
+      "pat": "\\bconfidential\\w*|proprietary information|trade secrets?|non-?disclos\\w*|bảo mật|bí mật kinh doanh|thông tin mật",
+      "desc": "Clause imposes a confidentiality or non-disclosure duty."
+    },
+    {
+      "id": "R18",
+      "name": "assignment_or_delegation",
+      "group": "ben_thu_ba",
+      "sev": "low",
+      "cats": [
+        "rights_and_obligations",
+        "general_and_boilerplate",
+        "term_and_termination",
+        "preamble_and_scope"
+      ],
+      "pat": "\\b(?:may|shall not|will not|not)\\b[^.]{0,40}(?:\\bassign(?:ment)?\\b|\\bbe assigned\\b|\\bdelegat(?:e|ed|ion)\\b|\\bsubcontract\\w*|transfer (?:its|his|her|any|all) (?:rights|interests?|obligations))|\\bsubcontract\\w*|\\bfreely assign\\w*|chuyển nhượng|thầu phụ",
+      "desc": "Clause allows, restricts or conditions assignment, delegation or subcontracting."
+    },
+    {
+      "id": "R20",
+      "name": "third_party_reliance",
+      "group": "ben_thu_ba",
+      "sev": "low",
+      "cats": [
+        "rights_and_obligations",
+        "general_and_boilerplate",
+        "breach_and_liabilities",
+        "compensation_and_payment"
+      ],
+      "pat": "third[- ]part(?:y|ies)|bên thứ ba",
+      "desc": "Clause involves rights, duties or actions of third parties."
+    }
+  ],
+  "missing_section_rules": [
+    {
+      "id": "M01",
+      "name": "missing_governing_law",
+      "group": "phap_ly",
+      "sev": "medium",
+      "cat": "dispute_and_governing_law",
+      "desc": "Agreement has no governing law / dispute clause.",
+      "fallback": "governing law|governed by|choice of law|jurisdiction|arbitrat|luật áp dụng|pháp luật điều chỉnh|giải quyết tranh chấp|trọng tài|tòa án"
+    },
+    {
+      "id": "M02",
+      "name": "missing_term_termination",
+      "group": "van_hanh",
+      "sev": "medium",
+      "cat": "term_and_termination",
+      "desc": "Agreement has no term / termination clause.",
+      "fallback": "terminat\\w*|expir\\w*|renew\\w*|chấm dứt|hết hạn|gia hạn"
+    },
+    {
+      "id": "M03",
+      "name": "missing_breach_liabilities",
+      "group": "phap_ly",
+      "sev": "low",
+      "cat": "breach_and_liabilities",
+      "desc": "Agreement has no breach / liability clause.",
+      "fallback": "\\bbreach\\w*|\\bliabilit\\w*|\\bliable\\b|indemnif\\w*|vi phạm|bồi thường|trách nhiệm"
+    }
+  ]
+}

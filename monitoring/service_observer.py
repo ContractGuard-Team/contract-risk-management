@@ -31,7 +31,8 @@ class ServiceObserver(NullObserver):
             stage, percentage = "agent_2", 60
         elif name.startswith("agent_3"):
             stage, percentage = "agent_3", 85
-        if self.progress and stage:
+        # <agent>.reflect runs after Agent 3 (long-term memory); reporting it would move the stage backwards.
+        if self.progress and stage and not name.endswith(".reflect"):
             self.progress(stage, percentage)
         observation, start = SafeObservation(), time.monotonic()
         if model:

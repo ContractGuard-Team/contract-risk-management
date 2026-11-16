@@ -98,7 +98,7 @@ class WorkflowTests(unittest.TestCase):
             for c in contract().chunks:
                 saved = flow.cache.get(result["cache_key"], "classification", c.chunk_id)
                 self.assertEqual(saved["result"]["text"], "result:" + c.text)
-                self.assertEqual(saved["scope"], {"contract_id": "contract-a", "version": "v1",
+                self.assertEqual(saved["scope"], {"contract_id": "contract-a", "contract_version": "v1",
                                                   "chunk_id": c.chunk_id, "chunk_index": c.index})
                 self.assertNotIn("memory", saved)  # released once the aggregate was confirmed
             # Chunk 2 saw both earlier chunks of the same contract through Agent 1 memory.

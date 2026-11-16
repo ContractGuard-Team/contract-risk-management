@@ -72,7 +72,7 @@ class ContractRiskPipeline:
     def _learn(self, result):
         """Long-term memory: each agent reflects on its finished output and proposes lessons for review.
         Best effort: the contract result is already stored, so a reflection failure never fails the job."""
-        contract = {key: result[key] for key in ("job_id", "contract_id", "version")}
+        contract = {key: result[key] for key in ("job_id", "contract_id", "contract_version")}
         for agent_id, agent in self.agents.items():
             output = result["results"].get(agent_id) or {}
             text = output.get("text") if isinstance(output.get("text"), str) else json.dumps(output, ensure_ascii=False)
@@ -89,14 +89,14 @@ class ContractRiskPipeline:
             raise ValueError("job_id is required for cache isolation/resume")
         if "workflow" in contract.context:
             raise ValueError("'workflow' is reserved for orchestration")
-        key = hashlib.sha256(canonical([job_id, contract.contract_id, contract.version]).encode()).hexdigest()
+        key = hashlib.sha256(canonical([job_id, contract.contract_id, contract.contract_version]).encode()).hexdigest()
         try:
             with self.cache.job_lock(key):
                 with self.observer.attributes(session_id=key, tags=["contract-risk-management"],
                                               trace_name="contract.workflow"), \
                      self.observer.span("contract.workflow", kind="chain", trace_id=uuid4().hex,
                                        metadata={"job_id": job_id, "contract_id": contract.contract_id,
-                                                 "version": contract.version, "chunk_count": len(contract.chunks)}) as root:
+                                                 "contract_version": contract.contract_version, "chunk_count": len(contract.chunks)}) as root:
                     root.summary(input={"chunk_count": len(contract.chunks),
                                         "total_characters": sum(len(c.text) for c in contract.chunks)})
                     self.cache.begin(key, contract.fingerprint(self._execution()))
@@ -114,7 +114,7 @@ class ContractRiskPipeline:
                     finally:
                         forget(self.checkpointer, key)  # durable progress is the cache, not RAM
                     result = {"job_id": job_id, "contract_id": contract.contract_id,
-                              "version": contract.version, "cache_key": key, "status": "completed",
+                              "contract_version": contract.contract_version, "cache_key": key, "status": "completed",
                               "results": state["results"]}
                     self.cache.put(key, "complete", result)
                     release_run(self.cache, key)  # final result stored: Agent 2/3 memory no longer needed

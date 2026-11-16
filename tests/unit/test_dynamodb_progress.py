@@ -44,7 +44,7 @@ class DynamoProgressTests(unittest.TestCase):
         self.store = ContractJobStore(self.tables, clock=lambda: self.clock[0])
 
     def job(self, name="job-a", contract="contract-a"):
-        return QueueJob.from_body({"job_id": name, "contract_id": contract, "s3_bucket": "input", "s3_key": "a.txt"})
+        return QueueJob.from_body({"job_id": name, "contract_id": contract, "bucket": "input", "source_file_key": "a.txt"})
 
     def start(self, name="job-a", contract="contract-a"):
         job = self.job(name, contract)

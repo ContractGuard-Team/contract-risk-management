@@ -29,6 +29,7 @@ class WorkerSettings:
     max_job_seconds: int = 39600
     events_table_name: str = ""
     data_dir: str = "/data"
+    results_queue_url: str = ""  # ContractGuard analysis-results queue: enables workers/partner.py
 
     def __post_init__(self):
         if not all(isinstance(v, str) and v.strip() for v in (self.queue_url, self.table_name, self.output_bucket)):
@@ -45,6 +46,8 @@ class WorkerSettings:
             raise ValueError("max_job_seconds plus visibility must be below SQS's 12-hour limit")
         if self.events_table_name and self.events_table_name == self.table_name:
             raise ValueError("Jobs and events must use distinct DynamoDB tables")
+        if self.results_queue_url and (not self.input_bucket or self.output_bucket != self.input_bucket):
+            raise ValueError("ContractGuard mode: WORKER_INPUT_BUCKET and WORKER_OUTPUT_BUCKET must both be its bucket")
 
     def validate_connections(self):
         validate_url(self.input_processing_url, "WORKER_INPUT_PROCESSING_URL")
@@ -68,7 +71,8 @@ class WorkerSettings:
                  "langgraph_url": "WORKER_LANGGRAPH_URL", "service_token": "INTERNAL_API_TOKEN",
                  "input_processing_token": "WORKER_INPUT_PROCESSING_TOKEN",
                  "langfuse_base_url": "WORKER_LANGFUSE_BASE_URL",
-                 "langfuse_public_key": "WORKER_LANGFUSE_PUBLIC_KEY", "langfuse_secret_key": "WORKER_LANGFUSE_SECRET_KEY"}
+                 "langfuse_public_key": "WORKER_LANGFUSE_PUBLIC_KEY", "langfuse_secret_key": "WORKER_LANGFUSE_SECRET_KEY",
+                 "results_queue_url": "WORKER_RESULTS_QUEUE_URL"}
         for field, env in names.items():
             value = os.environ.get(env, "").strip()
             if value:

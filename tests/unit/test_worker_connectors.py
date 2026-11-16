@@ -72,7 +72,7 @@ class ConnectorTests(unittest.TestCase):
                 request_json(client, "GET", "https://example.test", max_bytes=10)
 
     def test_processing_ack_must_match_identity(self):
-        job = QueueJob.from_body({"job_id": "j", "contract_id": "c", "s3_bucket": "input", "s3_key": "x.txt"})
+        job = QueueJob.from_body({"job_id": "j", "contract_id": "c", "bucket": "input", "source_file_key": "x.txt"})
         with httpx.Client(transport=httpx.MockTransport(lambda _: httpx.Response(202, json={"status": "accepted", "job_id": "other"}))) as http:
             client = InputProcessingClient("http://processing/jobs", token="secret", client=http)
             with self.assertRaises(ValueError):

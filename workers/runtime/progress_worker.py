@@ -46,12 +46,18 @@ class ProgressWorker:
             result = event.get("result")
             if not isinstance(result, dict) or result.get("agent_id") != "agent_3_recommendation" or not result.get("text"):
                 raise ValueError("Completion requires Agent 3 output")
-            identity = hashlib.sha256(canonical([event["job_id"], event["runtime_id"]]).encode()).hexdigest()
-            # Attempt-scoped key prevents a stale writer from overwriting a newer attempt's artifact.
-            key = f"{self.prefix}/{identity}/{event['owner']}/agent3.json"
-            output = self.storage.write_json(self.output_bucket, key, {
-                "job_id": event["job_id"], "runtime_id": event["runtime_id"],
-                "contract_id": event["contract_id"], "result": result})
+            partner = event.get("partner")
+            if partner:  # ContractGuard decides the key; a redelivered job simply overwrites it (§4.6)
+                from workers.partner import extraction
+                output = self.storage.write_json(self.output_bucket, partner["result_key"],
+                                                 extraction(event, result, partner))
+            else:
+                identity = hashlib.sha256(canonical([event["job_id"], event["runtime_id"]]).encode()).hexdigest()
+                # Attempt-scoped key prevents a stale writer from overwriting a newer attempt's artifact.
+                key = f"{self.prefix}/{identity}/{event['owner']}/agent3.json"
+                output = self.storage.write_json(self.output_bucket, key, {
+                    "job_id": event["job_id"], "runtime_id": event["runtime_id"],
+                    "contract_id": event["contract_id"], "result": result})
         self.store.apply(event, output=output)
 
     def watch(self, command):
@@ -141,8 +147,9 @@ class ProgressChannel:
 
 
 class JobEvents:
-    def __init__(self, job, runtime_id, owner, sender, guard=lambda: None):
+    def __init__(self, job, runtime_id, owner, sender, guard=lambda: None, on_emit=None):
         self.job, self.runtime_id, self.owner, self.sender, self.guard = job, runtime_id, owner, sender, guard
+        self.on_emit = on_emit
         self.sequence = 0
         self.progress = 0
         self.stage = "received"
@@ -151,10 +158,16 @@ class JobEvents:
         self.guard()
         self.sequence += 1
         next_progress = max(self.progress, progress)
-        self.sender({"job_id": self.job.job_id, "contract_id": self.job.contract_id,
-                     "runtime_id": self.runtime_id, "owner": self.owner, "sequence": self.sequence,
-                     "event_id": uuid4().hex, "stage": stage, "status": status,
-                     "progress": next_progress, "details": details or {}, "result": result})
+        event = {"job_id": self.job.job_id, "contract_id": self.job.contract_id,
+                 "runtime_id": self.runtime_id, "owner": self.owner, "sequence": self.sequence,
+                 "event_id": uuid4().hex, "stage": stage, "status": status,
+                 "progress": next_progress, "details": details or {}, "result": result}
+        partner = (getattr(self.job, "info", None) or {}).get("metadata", {}).get("contractguard")
+        if partner and status == "completed":
+            event["partner"] = partner  # the writer puts the result at ContractGuard's result_key
+        self.sender(event)
+        if self.on_emit is not None and status == "running":
+            self.on_emit(stage)
         # Advance local progress only after persistence is acknowledged. A failed final
         # S3 write must not leave a failed job at 100%.
         self.progress, self.stage = next_progress, stage

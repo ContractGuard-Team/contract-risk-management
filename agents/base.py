@@ -11,6 +11,38 @@ from agents.hermes.tool_registry import ToolRegistry
 from monitoring.observer import NullObserver
 from monitoring.usage import model_usage
 
+MAX_TOOL_ROUNDS = 6        # model -> tools -> model rounds per evaluation pass
+MAX_REEVALUATIONS = 2      # extra passes when the answer still lists evidence gaps
+MAX_TOOL_RESULT_CHARS = 20_000
+EVIDENCE_GAPS = "evidence_gaps"  # top-level output field: what still lacks a source (empty = enough evidence)
+REEVALUATE = ("Kết quả trên còn thiếu bằng chứng cho: {gaps}. Gọi thêm tool phù hợp để tìm căn cứ cho đúng các điểm "
+              "này rồi đánh giá lại và trả lại TOÀN BỘ kết quả theo schema. Nếu vẫn không tìm được nguồn, giữ điểm đó "
+              "trong evidence_gaps; tuyệt đối không bịa căn cứ.")
+
+
+def evidence_gaps(text) -> list:
+    """Gaps the model itself reported in its JSON answer; [] when not JSON or none listed."""
+    raw = text.strip() if isinstance(text, str) else ""
+    if raw.startswith("```"):
+        raw = raw.strip("`").removeprefix("json").strip()
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        return []
+    gaps = data.get(EVIDENCE_GAPS) if isinstance(data, dict) else None
+    return [gap for gap in gaps if gap] if isinstance(gaps, list) else []
+
+
+def add_usage(total: dict, usage: dict) -> dict:
+    for key, value in (usage or {}).items():
+        if isinstance(value, dict):
+            total[key] = add_usage(dict(total.get(key) or {}), value)
+        elif isinstance(value, (int, float)) and not isinstance(value, bool):
+            total[key] = total.get(key, 0) + value
+        else:
+            total.setdefault(key, value)
+    return total
+
 
 class BaseAgent:
     agent_id = ""
@@ -28,11 +60,15 @@ class BaseAgent:
         return build_context(request)
 
     def build_messages(self, request: AgentRequest) -> list[dict]:
-        """System: core prompt, external-services prompt, examples, approved long-term lessons; user: this request.
-        Short-term memory (earlier turns of this contract) is inserted between them by the ContextEngine."""
+        """System: soul, core prompt, external-services prompt, rule files, output schema, examples, approved
+        long-term lessons; user: this request. Short-term memory (earlier turns of this contract) is inserted
+        between them by the ContextEngine."""
         request.validate()
         prompts = load_prompts(self.directory)
-        system = [prompts["core"], prompts["external"]]
+        system = [prompts["soul"], prompts["core"], prompts["external"]]
+        system += [f"# Rules: {name}\n{text}" for name, text in prompts["rules"]]
+        if prompts["output_schema"]:
+            system.append("# Output schema (JSON Schema, bắt buộc tuân thủ)\n" + prompts["output_schema"])
         if prompts["examples"]:
             system.append("\n\n".join(["# Examples", *(f"## Example {i}\n{text}"
                                                        for i, text in enumerate(prompts["examples"], 1))]))
@@ -63,26 +99,73 @@ class BaseAgent:
             observation.update(output=result)
             return result
 
+    def _tool_message(self, call, observer) -> str:
+        """Run one model tool call; errors go back to the model as data so it can search elsewhere, never invent."""
+        try:
+            arguments = json.loads(call.get("arguments") or "{}")
+            if not isinstance(arguments, dict):
+                raise ValueError("tool arguments must be a JSON object")
+            result = self.run_tool(call["name"], arguments, observer=observer)
+        except Exception as exc:  # unknown tool, bad arguments, connector not configured, upstream failure
+            result = {"error": type(exc).__name__, "message": str(exc)[:500]}
+        text = json.dumps(result, ensure_ascii=False, default=str)
+        if len(text) > MAX_TOOL_RESULT_CHARS:  # shortcut: hard cut; page large sources via the tool's own offset
+            text = text[:MAX_TOOL_RESULT_CHARS] + "...[truncated]"
+        return text
+
+    def _generate(self, messages, tools, *, final):
+        kwargs = {"inference_config": deepcopy(self.inference_config)}
+        if tools:  # providers without tools (Agent 1, tests) keep the plain call signature
+            kwargs["tools"] = tools
+            if final:
+                kwargs["tool_choice"] = "none"  # tool budget spent: answer with what was found
+        return self.provider.generate(messages, **kwargs)
+
     def run(self, request: AgentRequest, *, memory=None, observer=None, trace_metadata=None) -> AgentResult:
         current = self.build_messages(request)
         messages = memory.prepare(current) if memory is not None else current
         observer = observer if observer is not None else NullObserver()
         settings = getattr(self.provider, "settings", None)
+        tools = self.tools.specs()
         with observer.span(self.agent_id, kind="generation", metadata=trace_metadata,
                            model=getattr(settings, "model", None)) as observation:
-            observation.summary(input={"message_count": len(messages),
-                                       "content_characters": sum(len(m.get("content", "")) for m in messages)})
+            observation.summary(input={"message_count": len(messages), "tool_count": len(tools),
+                                       "content_characters": sum(len(m.get("content") or "") for m in messages)})
             observation.update(input=messages, model_parameters=deepcopy(self.inference_config))
-            response = self.provider.generate(messages, inference_config=deepcopy(self.inference_config))
-            # Record billed usage even when the response is later rejected (e.g. token limit).
-            observation.summary(output={"text_characters": len(response.text) if isinstance(response.text, str) else 0,
-                                        "stop_reason": response.stop_reason})
-            observation.update(output=response.text, usage_details=model_usage(response.usage))
-            if not isinstance(response.text, str) or not response.text.strip():
-                raise ModelResponseError("Model returned no text")
-            if response.stop_reason != "stop":
-                raise ModelResponseError(f"Model did not complete: {response.stop_reason}")
+            transcript, usage = list(messages), {}
+            rounds = reevaluations = tool_calls = 0
+            while True:
+                response = self._generate(transcript, tools, final=rounds >= MAX_TOOL_ROUNDS)
+                add_usage(usage, response.usage)  # billed even when the response is rejected below
+                if response.tool_calls:
+                    if not tools or rounds >= MAX_TOOL_ROUNDS:
+                        raise ModelResponseError("Model requested tools after the tool budget was spent")
+                    rounds += 1
+                    tool_calls += len(response.tool_calls)
+                    transcript.append({"role": "assistant", "content": response.text or None, "tool_calls": [
+                        {"id": c["id"], "type": "function", "function": {"name": c["name"], "arguments": c["arguments"]}}
+                        for c in response.tool_calls]})
+                    transcript += [{"role": "tool", "tool_call_id": c["id"], "content": self._tool_message(c, observer)}
+                                   for c in response.tool_calls]
+                    continue
+                if not isinstance(response.text, str) or not response.text.strip():
+                    raise ModelResponseError("Model returned no text")
+                if response.stop_reason != "stop":
+                    raise ModelResponseError(f"Model did not complete: {response.stop_reason}")
+                gaps = evidence_gaps(response.text)
+                if gaps and tools and reevaluations < MAX_REEVALUATIONS:
+                    # Evidence missing: search again (fresh tool budget) and re-evaluate the whole answer.
+                    reevaluations, rounds = reevaluations + 1, 0
+                    transcript += [{"role": "assistant", "content": response.text},
+                                   {"role": "user", "content": REEVALUATE.format(
+                                       gaps=json.dumps(gaps, ensure_ascii=False)[:2000])}]
+                    continue
+                break
+            observation.summary(output={"text_characters": len(response.text), "stop_reason": response.stop_reason,
+                                        "tool_calls": tool_calls, "reevaluations": reevaluations,
+                                        "evidence_gaps": len(evidence_gaps(response.text))})
+            observation.update(output=response.text, usage_details=model_usage(usage))
         if memory is not None:
-            memory.record(current, response)
+            memory.record(current, response)  # final answer only; tool transcripts are not kept in memory
         # TODO: Parse/validate domain JSON here once the output schema is specified.
-        return self.output_type(self.agent_id, response.text, deepcopy(response.usage), response.stop_reason)
+        return self.output_type(self.agent_id, response.text, usage, response.stop_reason)

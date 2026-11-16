@@ -31,9 +31,9 @@ def parse_job(data: dict, *, has_file=False) -> Job:
     command = data.get("command", "preprocess")
     if command != "preprocess":
         raise JobError("Only command='preprocess' is supported")
-    version = data.get("version", "1")
+    version = data.get("contract_version", "1")
     if type(version) not in (str, int) or not str(version).strip():
-        raise JobError("version must be a non-empty string or integer")
+        raise JobError("contract_version must be a non-empty string or integer")
     job_id = data.get("job_id", f"job-{uuid4().hex}")
     if not isinstance(job_id, str) or not job_id.strip():
         raise JobError("job_id must be a non-empty string")

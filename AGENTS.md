@@ -229,3 +229,36 @@
 
 - `python scripts/download_models.py` tải EMBEDDING_MODEL (e5-large) + RAG_RERANK_MODEL (jina v2) vào `<repo>/models` (gitignored + dockerignored, copy kèm repo lên EC2). mcp mount `./models:/models:ro` (bỏ volume `mcp-models`), pipeline `EMBEDDING_CACHE_DIR=models` (tương đối theo repo); cả hai `HF_HUB_OFFLINE=1` → không tải lúc chạy. `setup.sh` dừng nếu thiếu `models/`. Tesseract vie đã nằm trong image input-processing.
 
+
+## Worker ↔ ContractGuard (2026-11-15, mới nhất)
+
+- Đọc mục cuối `docs/workers.md`. `WORKER_RESULTS_QUEUE_URL` bật `workers/partner.py` (giao thức đối tác §1–4: ping/pong, request.json, progress/completed/failed lên queue kết quả, clean_file_key, result_key, xóa quarantine, xóa message cuối). Kiến trúc worker KHÔNG đổi; định dạng message cũ vẫn chạy khi biến rỗng. Không tự ghép key S3.
+- `.env` mục 6 đã điền queue/bucket của tài khoản 699061129385; IAM chéo tài khoản do người dùng đã cấu hình (role ContractRisk-EC2-Role). DynamoDB jobs/events vẫn ở tài khoản AI.
+- Tạm: `extraction.json` bố cục tạm chờ schema `extraction.v2`; error_code ERR-AI-001/002 và step = tên stage chờ danh mục của đối tác. 186/186 unit test; chưa chạy AWS thật.
+
+## Tên mục thống nhất theo schema worker nhận (2026-11-16, mới nhất)
+
+- Mọi thành phần dùng tên mục giống ContractGuard: `version` → **`contract_version`** (ContractInput, Job/chunk của input-processing, LangGraph scope/cache key/kết quả, context Agent 1, QueueJob, CLI `--contract-version`). Message nội bộ cũ của worker dùng `source_file_key` (+ `bucket`, mặc định WORKER_INPUT_BUCKET); đã bỏ `version`, `source`, `s3_bucket`, `s3_key`, `s3_version_id`, không nhận tên cũ. Adapter ContractGuard tạo cùng thân message này.
+- Schema tham chiếu: `docs/schemas/worker_sqs_input.schema.json` (`x-field-names` liệt kê tên chuẩn). Cache LangGraph/agent cũ không dùng lại được (fingerprint đổi). 194/194 unit test.
+
+## Kiểm tra đồng nhất schema giữa container (2026-11-16, mới nhất)
+
+- Quét tĩnh: không còn `version`/`s3_key`/`s3_bucket`/`s3_version_id` của hợp đồng trong code. `version` ở `rag/` và `data_pipeline/` là phiên bản văn bản luật (domain khác), `version_id` ở `contract_source.py` là S3 VersionId.
+- Đã build lại 9 image và chạy thật giữa các container (stack riêng, Secrets Manager giả, Moto, model fixture): smoke TXT + PNG (message nội bộ) và luồng ContractGuard (ping/pong, request.json → extraction.json + completed, clean copy, xóa quarantine) đều đạt.
+- Lỗi tìm thấy và đã sửa: span `<agent>.reflect` (long-term memory sau Agent 3) làm tiến độ báo lùi `agent_3 → agent_1` lên DynamoDB/queue ContractGuard; `monitoring/service_observer.py` bỏ qua span reflect. Smoke test đặt `WORKER_RESULTS_QUEUE_URL=""`. 195/195 unit test.
+- Stack chính local vẫn chạy image cũ (không thể recreate khi chưa có credential đọc Secrets Manager). Còn chờ đối tác: extraction.v2, analysis-request.v1, queue-messages.v1, danh mục step/error_code, tên khóa `limits`.
+
+## Output nghiệp vụ vs ContractGuard (2026-11-16, kiểm tra, chưa sửa code)
+
+- Hiện tại: AgentResult chỉ có `agent_id/text/usage/stop_reason` (schema nghiệp vụ TODO); `workflow_service.execute` chỉ lấy Agent 3 nên `extraction.json` (`workers/partner.py:extraction`) bỏ mất output Agent 1/2, lại ghi nhãn `"schema": "extraction.v2"` dù chưa khớp → backend sẽ từ chối cả kết quả (job failed).
+- Gói `ContractGuard_4_2-4_5_Package` có 3 schema theo ĐIỀU KHOẢN: `extraction_output` (Agent trích xuất: contract_id, clause_id, category 11 giá trị, facts[]), `risk_verdict` (verify_clause: verdicts R01–R20 có evidence_quote/rationale ≤300), `risk_score` (score_contract: công thức 4.5b tất định từ `risk/risk_policy.json`). Không có schema cho Agent 3 (đề xuất).
+- Khác biệt kiến trúc: ContractGuard xử lý theo clause (clause_id + category + clause_text, candidate_hits từ bộ quét luật); project chia chunk theo token. Quote phải là chuỗi con liên tục của clause_text (sau chuẩn hóa) — cần validator code trước khi ghi.
+- Chưa có trong tay: `contracts/extraction.v2.schema.json`, `contracts/examples/extraction.v2.example.json`, `docs/06-ai-integration-points.md` §3.1 (khối `scoring`, kiểm trích dẫn). Pattern `^HD-[0-9]{3}$` trong gói là ID bộ mẫu, không suy ra cho job thật.
+
+## Prompt 3 agent + vòng tool + partner_document (2026-11-17, mới nhất)
+
+- Đọc `docs/agent_core.md` (mục Prompt và Vòng lặp gọi tool). Prompt ĐÃ ĐIỀN theo yêu cầu người dùng (thay quyết định "để trống" cũ): `prompts/soul.md` (mới, bắt buộc) + `core.md` + `external.md` cho 3 agent; nguồn từ `ContractGuard_4_2-4_5_Package.zip` (Extraction → Agent 1, Risk → Agent 2, nguyên văn sau phần "Áp dụng trong hệ thống"); Agent 3 viết mới. Schema output người dùng tự thiết kế sau: prompt chỉ ràng buộc "theo schema trong source code"; đặt file `agents/<agent>/schemas/output.schema.json` thì loader tự nạp.
+- Agent 1 `examples/` = 10 hợp đồng mẫu rút gọn (chỉ cách tách). Agent 2 `prompts/rules/risk_policy.json` = file luật (đối chiếu sau khi chấm điểm để xác định loại rủi ro); `examples/` = 3 báo cáo từ `risk_rule_report.json` (file đó là kết quả chấm 100 hợp đồng mẫu, không phải danh mục luật).
+- `agents/base.py:run`: vòng function calling với tool MCP (spec từ `list_tools`, ≤6 vòng, lỗi tool trả cho model) + đánh giá lại khi output JSON có `evidence_gaps` không rỗng (≤2 lần). Schema của Agent 2/3 phải có khóa gốc `evidence_gaps`. Đây là nhánh "thiếu dữ liệu → RAG/Search → đánh giá lại" trước đây còn thiếu.
+- MCP tool thứ 10 `partner_document` (chỉ Agent 3): đọc tài liệu gốc trong bucket ContractGuard (`PARTNER_S3_BUCKET=${WORKER_INPUT_BUCKET}`), chỉ `quarantine/`/`clean/`, chỉ đọc; PDF/DOCX/ảnh trích qua service input-processing. Worker thêm `context.source_document`. IAM đối tác chỉ cho GetObject `quarantine/*`.
+- 201/201 unit test; 9/9 image build lại; stack thử: smoke TXT đạt, `partner_document` → input-processing (DOCX) đạt, agent-3 lấy 10 spec tool từ MCP. Chưa gọi OpenAI thật (vòng tool chỉ kiểm bằng client giả), chưa đọc bucket đối tác thật. System prompt A1 ≈ 60 KB, A2 ≈ 55 KB: `configs/memory.yaml` (TODO) phải tính.

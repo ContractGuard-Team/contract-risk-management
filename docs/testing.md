@@ -84,6 +84,13 @@ Không cần Docker socket trong container.
   runtime sinh bởi init_env không có trong image metadata. `pip check` đạt cho bốn
   bộ dependency khác nhau: worker, processing, agents, langgraph.
 - Script EC2 được chuyển sang LF, có .gitattributes bảo toàn LF và qua `sh -n` trên Linux.
+- (2026-11-16, sau khi thống nhất tên mục `contract_version`/`source_file_key`) 9/9 image build lại;
+  smoke TXT + PNG đạt với message nội bộ. Smoke đặt `WORKER_RESULTS_QUEUE_URL=""` vì `.env` có thể
+  bật chế độ ContractGuard. Luồng ContractGuard thật giữa container (ping → pong; `analysis_requested`
+  → request.json → input-processing → LangGraph → Agent 1/2/3 → extraction.json, bản clean, xóa
+  quarantine, mọi message ra qua `check_outbound`, queue yêu cầu rỗng) đạt bằng probe tạm.
+- Stack chính dùng Secrets Manager nên stack thử chạy với project riêng và Secrets Manager giả
+  (một service HTTP trả `GetSecretValue`), sau đó `down -v`.
 
 Evidence local: `.cache/image-manifest.json`, `.cache/final-e2e.log`,
 `.cache/final-e2e-exit.txt` (0), `.cache/executed-notebooks/`. Không commit cache.

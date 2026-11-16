@@ -1,0 +1,376 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "contract-risk-management/worker_sqs_input.schema.json",
+  "title": "Message SQS mà worker nhận (queue việc)",
+  "description": "Viết lại từ code worker hiện tại (workers/partner.py, workers/schemas.py) để xem xét; code là nơi kiểm tra thật. Worker chạy MỘT trong hai chế độ, chọn bằng biến môi trường: WORKER_RESULTS_QUEUE_URL có giá trị -> chế độ ContractGuard (message theo tài liệu 07-worker-aws-integration.md §3); để trống -> định dạng nội bộ cũ. Các quy tắc JSON Schema không diễn đạt được ghi ở trường x-rules. Message sai: chế độ ContractGuard gửi `failed` + ERR-AI-001 rồi xóa message (nếu đọc được job_id); định dạng nội bộ giữ message cho SQS gửi lại tới DLQ.",
+  "x-layout": {
+    "_doc": "Bố cục worker phải nhận, đọc nhanh. (bắt buộc) / (tùy chọn) ghi ở cuối dòng; quy tắc chi tiết nằm trong $defs bên dưới.",
+    "1_contractguard_ping": [
+      "{",
+      "  \"message_version\": \"1\",                         (bắt buộc) luôn là \"1\"",
+      "  \"event_type\": \"ping\",                           (bắt buộc)",
+      "  \"job_id\": \"<uuid>\"                              (bắt buộc) 1..256 ký tự",
+      "}",
+      "=> worker gửi {\"message_version\":\"1\",\"event_type\":\"pong\",\"job_id\":\"<uuid>\"} rồi xóa message"
+    ],
+    "2_contractguard_analysis_requested": [
+      "{",
+      "  \"message_version\": \"1\",                         (bắt buộc)",
+      "  \"event_type\": \"analysis_requested\",             (bắt buộc)",
+      "  \"job_id\": \"<uuid>\",                             (bắt buộc)",
+      "  \"request_key\": \"results/<uuid>/request.json\"    (bắt buộc) đúng job_id ở trên",
+      "}",
+      "=> worker đọc request_key trong bucket ContractGuard (bố cục 3)"
+    ],
+    "3_contractguard_request_json (object S3 results/<uuid>/request.json, tối đa 256 KiB)": [
+      "{",
+      "  \"job_id\": \"<uuid>\",                                              (tùy chọn) nếu có phải trùng message",
+      "  \"source_file_key\": \"quarantine/<user>/<upload>.<pdf|docx|txt|png|jpg|jpeg|tif|tiff>\",  (bắt buộc) ≤ 20 MiB",
+      "  \"clean_file_key\": \"clean/<workspace>/<contract>/v<n>/source.<ext>\",  (bắt buộc) worker ghi bản đã kiểm tra",
+      "  \"result_key\": \"results/<uuid>/extraction.json\",                   (bắt buộc) worker ghi kết quả",
+      "  \"contract_id\": \"<string>\",                                         (tùy chọn) mặc định = <contract> trong clean_file_key",
+      "  \"contract_version\": \"<string|int>\",                                (tùy chọn) mặc định = <n> trong clean_file_key",
+      "  \"output_language\": \"vi\",                                           (tùy chọn) mã ngôn ngữ -> context.output_language",
+      "  \"limits\": {                                                         (tùy chọn) -> context.limits",
+      "    \"max_file_bytes\": <int ≥ 1>,                                     (tùy chọn) chỉ siết thêm, tối đa 20 MiB",
+      "    \"max_pages\": <int ≥ 1>                                           (tùy chọn) so với số trang đếm được",
+      "  },",
+      "  \"context\": { ... }                                                  (tùy chọn) bỏ các khóa workflow/preprocessing/worker",
+      "}"
+    ],
+    "4_internal_job (chỉ khi WORKER_RESULTS_QUEUE_URL để trống)": [
+      "{",
+      "  \"job_id\": \"<string>\",                    (bắt buộc) 1..256 ký tự",
+      "  \"contract_id\": \"<string>\",               (bắt buộc) 1..256 ký tự",
+      "  \"contract_version\": \"<string|int>\",      (tùy chọn) mặc định \"1\"",
+      "  \"source_file_key\": \"<path>.<pdf|docx|txt|png|jpg|jpeg|tif|tiff>\",   (bắt buộc) ≤ 20 MiB",
+      "  \"bucket\": \"<bucket>\",                    (tùy chọn) mặc định WORKER_INPUT_BUCKET",
+      "  \"runtime_id\": \"<string>\",                (tùy chọn) ≤ 128 ký tự",
+      "  \"options\": { \"max_tokens\": <int ≥ 32>, ... },          (tùy chọn) input-processing kiểm",
+      "  \"extraction\": { \"ocr\": \"auto|always|never\", \"languages\": \"vie+eng\" },   (tùy chọn)",
+      "  \"source_metadata\": { ... },              (tùy chọn)",
+      "  \"context\": { ... },                      (tùy chọn) CẤM khóa workflow/preprocessing/worker",
+      "  \"metadata\": { ... }                      (tùy chọn)",
+      "}                                            toàn bộ thông tin job ≤ 32 KiB"
+    ]
+  },
+  "oneOf": [
+    {
+      "$ref": "#/$defs/contractguard_ping"
+    },
+    {
+      "$ref": "#/$defs/contractguard_analysis_requested"
+    },
+    {
+      "$ref": "#/$defs/internal_job"
+    }
+  ],
+  "$defs": {
+    "job_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "\\S",
+      "description": "Mã job do backend cấp (ContractGuard dùng UUID). Không được chỉ có khoảng trắng."
+    },
+    "contractguard_ping": {
+      "title": "ContractGuard: ping (backend -> worker)",
+      "description": "Kiểm tra worker còn sống. Worker gửi `pong` cùng job_id lên queue kết quả rồi xóa message.",
+      "type": "object",
+      "required": [
+        "message_version",
+        "event_type",
+        "job_id"
+      ],
+      "properties": {
+        "message_version": {
+          "const": "1"
+        },
+        "event_type": {
+          "const": "ping"
+        },
+        "job_id": {
+          "$ref": "#/$defs/job_id"
+        }
+      },
+      "additionalProperties": true,
+      "x-rules": [
+        "Trường thừa bị bỏ qua, không làm lỗi."
+      ],
+      "examples": [
+        {
+          "message_version": "1",
+          "event_type": "ping",
+          "job_id": "5f0c2c1e-0000-4000-8000-000000000001"
+        }
+      ]
+    },
+    "contractguard_analysis_requested": {
+      "title": "ContractGuard: analysis_requested (backend -> worker)",
+      "description": "Yêu cầu phân tích một hợp đồng. Worker đọc request_key (object S3 có cấu trúc `contractguard_request_json`) trong bucket WORKER_INPUT_BUCKET.",
+      "type": "object",
+      "required": [
+        "message_version",
+        "event_type",
+        "job_id",
+        "request_key"
+      ],
+      "properties": {
+        "message_version": {
+          "const": "1"
+        },
+        "event_type": {
+          "const": "analysis_requested"
+        },
+        "job_id": {
+          "$ref": "#/$defs/job_id"
+        },
+        "request_key": {
+          "type": "string",
+          "pattern": "^results/[^/]+/request\\.json$",
+          "description": "Key S3 của phiếu việc."
+        }
+      },
+      "additionalProperties": true,
+      "x-rules": [
+        "request_key phải ĐÚNG BẰNG `results/<job_id>/request.json` với job_id của chính message này.",
+        "Trường thừa bị bỏ qua."
+      ],
+      "examples": [
+        {
+          "message_version": "1",
+          "event_type": "analysis_requested",
+          "job_id": "5f0c2c1e-0000-4000-8000-000000000001",
+          "request_key": "results/5f0c2c1e-0000-4000-8000-000000000001/request.json"
+        }
+      ]
+    },
+    "contractguard_request_json": {
+      "title": "ContractGuard: nội dung results/<job_id>/request.json (đọc từ S3, không nằm trong message)",
+      "description": "Phiếu việc do backend ghi. Mọi key S3 worker dùng đều lấy từ đây, worker không tự ghép. Tối đa 256 KiB.",
+      "type": "object",
+      "required": [
+        "source_file_key",
+        "clean_file_key",
+        "result_key"
+      ],
+      "properties": {
+        "job_id": {
+          "$ref": "#/$defs/job_id",
+          "description": "Tùy chọn. Nếu có phải trùng job_id của message."
+        },
+        "source_file_key": {
+          "type": "string",
+          "maxLength": 1024,
+          "pattern": "^quarantine/.+\\.(txt|pdf|docx|png|jpg|jpeg|tif|tiff|TXT|PDF|DOCX|PNG|JPG|JPEG|TIF|TIFF)$",
+          "description": "File người dùng upload, chưa kiểm tra. Worker đọc, rồi xóa sau khi đã gửi `completed`. Chỉ nhận TXT, PDF, DOCX, PNG, JPEG, TIFF; tối đa 20 MiB."
+        },
+        "clean_file_key": {
+          "type": "string",
+          "maxLength": 1024,
+          "pattern": "^clean/",
+          "description": "Nơi worker ghi bản đã kiểm tra (bytes gốc + ContentType). Dạng khuyến nghị `clean/{workspace}/{contract}/v{n}/source.{ext}`: khi không có contract_id / contract_version, worker lấy {contract} làm contract_id và {n} làm version."
+        },
+        "result_key": {
+          "type": "string",
+          "pattern": "^results/[^/]+/extraction\\.json$",
+          "description": "Nơi worker ghi kết quả (extraction.v2 — hiện là bố cục tạm)."
+        },
+        "contract_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Tùy chọn. Ưu tiên hơn giá trị lấy từ clean_file_key."
+        },
+        "contract_version": {
+          "type": [
+            "string",
+            "integer"
+          ],
+          "description": "Tùy chọn. Ưu tiên hơn {n} trong clean_file_key; mặc định \"1\"."
+        },
+        "output_language": {
+          "type": "string",
+          "pattern": "^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})?$",
+          "description": "Tùy chọn. Mã ngôn ngữ (vi, en, vi-VN). Đưa vào context.output_language cho agent."
+        },
+        "limits": {
+          "type": "object",
+          "description": "Tùy chọn. Đưa nguyên vào context.limits cho agent. Worker tự áp hai khóa dưới; khóa khác chỉ được chuyển tiếp. Tên hai khóa là GIẢ ĐỊNH, chờ analysis-request.v1 của đối tác.",
+          "properties": {
+            "max_file_bytes": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "Chỉ siết thêm: giới hạn thực tế = min(giá trị này, 20 MiB)."
+            },
+            "max_pages": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "So với page_count do input-processing đếm (PDF/ảnh); TXT/DOCX không có số trang nên không áp."
+            }
+          },
+          "additionalProperties": true
+        },
+        "context": {
+          "type": "object",
+          "description": "Tùy chọn. Chuyển cho input-processing và LangGraph. Các khóa workflow, preprocessing, worker bị bỏ đi (dành riêng cho hệ thống). Không phải object thì coi như rỗng.",
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": true,
+      "x-rules": [
+        "Không key nào được chứa `..`; mỗi key tối đa 1024 ký tự.",
+        "result_key phải ĐÚNG BẰNG `results/<job_id>/extraction.json` (khớp IAM của đối tác); sai thì báo lỗi trước khi chạy agent.",
+        "Nếu có job_id thì phải trùng job_id của message.",
+        "Sai bất kỳ quy tắc nào: worker gửi `failed` + ERR-AI-001 và xóa message."
+      ],
+      "examples": [
+        {
+          "source_file_key": "quarantine/user-1/upload-1.pdf",
+          "clean_file_key": "clean/ws-1/contract-9/v2/source.pdf",
+          "result_key": "results/5f0c2c1e-0000-4000-8000-000000000001/extraction.json",
+          "output_language": "vi",
+          "limits": {
+            "max_pages": 50
+          },
+          "context": {
+            "party": "A"
+          }
+        }
+      ]
+    },
+    "internal_job": {
+      "title": "Định dạng nội bộ cũ (chỉ khi WORKER_RESULTS_QUEUE_URL để trống)",
+      "description": "Message tự định nghĩa của project. Từ 2026-11-16 dùng cùng tên mục với ContractGuard (contract_version, source_file_key); tên cũ version, source, s3_bucket, s3_key, s3_version_id đã bỏ.",
+      "type": "object",
+      "required": [
+        "job_id",
+        "contract_id",
+        "source_file_key"
+      ],
+      "not": {
+        "required": [
+          "message_version"
+        ]
+      },
+      "properties": {
+        "job_id": {
+          "$ref": "#/$defs/job_id"
+        },
+        "contract_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "\\S"
+        },
+        "contract_version": {
+          "type": [
+            "string",
+            "integer"
+          ],
+          "description": "Mặc định \"1\". Cùng tên với ContractGuard request.json."
+        },
+        "source_file_key": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\.(txt|pdf|docx|png|jpg|jpeg|tif|tiff|TXT|PDF|DOCX|PNG|JPG|JPEG|TIF|TIFF)$",
+          "description": "Key S3 của file hợp đồng (cùng tên với ContractGuard). Chỉ nhận TXT, PDF, DOCX, PNG, JPEG, TIFF; tối đa 20 MiB."
+        },
+        "bucket": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Tùy chọn; mặc định WORKER_INPUT_BUCKET."
+        },
+        "runtime_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "\\S"
+        },
+        "runtime-id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "\\S"
+        },
+        "options": {
+          "type": "object",
+          "description": "Tùy chọn chia chunk, input-processing kiểm: max_tokens (>= 32), overlap_tokens, min_tokens."
+        },
+        "extraction": {
+          "type": "object",
+          "description": "Worker chuyển nguyên; input-processing mới kiểm (sai -> job lỗi ở bước xử lý, không bị từ chối ngay khi nhận).",
+          "properties": {
+            "ocr": {
+              "enum": [
+                "auto",
+                "always",
+                "never"
+              ]
+            },
+            "languages": {
+              "type": "string",
+              "pattern": "^[a-zA-Z0-9_]+(\\+[a-zA-Z0-9_]+)*$"
+            }
+          },
+          "additionalProperties": false
+        },
+        "source_metadata": {
+          "type": "object"
+        },
+        "context": {
+          "type": "object",
+          "not": {
+            "anyOf": [
+              {
+                "required": [
+                  "workflow"
+                ]
+              },
+              {
+                "required": [
+                  "preprocessing"
+                ]
+              },
+              {
+                "required": [
+                  "worker"
+                ]
+              }
+            ]
+          },
+          "description": "Ở định dạng này các khóa workflow/preprocessing/worker bị TỪ CHỐI (khác chế độ ContractGuard là bỏ đi)."
+        },
+        "metadata": {
+          "type": "object"
+        }
+      },
+      "additionalProperties": true,
+      "x-rules": [
+        "Nếu có cả runtime_id và runtime-id thì phải bằng nhau.",
+        "Tổng phần thông tin job (trừ file) tối đa 32 KiB: nội dung hợp đồng phải để trên S3.",
+        "Một job_id gửi lại với nội dung khác bị từ chối (SourceError)."
+      ],
+      "examples": [
+        {
+          "job_id": "job-test",
+          "contract_id": "contract-test",
+          "contract_version": "1",
+          "source_file_key": "contracts/test.txt",
+          "bucket": "input-contracts",
+          "metadata": {
+            "tenant": "demo"
+          }
+        }
+      ]
+    }
+  },
+  "x-field-names": {
+    "_doc": "Tên mục dùng thống nhất trong mọi thành phần (worker, input-processing, LangGraph, agent, kết quả).",
+    "job_id": "mã job (backend cấp)",
+    "contract_id": "mã hợp đồng",
+    "contract_version": "phiên bản hợp đồng (trước đây `version`)",
+    "source_file_key": "key S3 của file gốc (trước đây `s3_key` / `source.key`)",
+    "bucket": "bucket S3 của file gốc (trước đây `s3_bucket` / `source.bucket`)",
+    "output_language, limits, context": "đi vào context chung của hợp đồng (ContractInput.context) cho mọi agent"
+  }
+}

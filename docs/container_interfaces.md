@@ -31,7 +31,7 @@ Payload gồm identity, job (envelope preprocessing), context và file:
 `{filename, data_base64, metadata}`. Bytes giải mã tối đa 20 MiB. Metadata gồm nguồn
 S3/key/version/hash; worker không import Python module preprocessing.
 
-Result gồm `contract`, `stats`, `warnings`. ContractInput JSON có contract_id, version,
+Result gồm `contract`, `stats`, `warnings`. ContractInput JSON có contract_id, contract_version,
 chunks[{chunk_id,index,text,metadata}], expected_chunk_count và context. Metadata giữ
 source spans, trang/element, heading, token estimate, hashes và thông tin file.
 Context.preprocessing chứa thống kê, warnings và extraction manifest. Các key reserved

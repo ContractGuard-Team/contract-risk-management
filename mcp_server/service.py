@@ -28,10 +28,12 @@ FACTORIES = {
     "supabase_list_tables": lazy("mcp_server.supabase_reader", "SupabaseReader"),
     "s3_get_object": lazy("mcp_server.s3_reader", "S3ReadOnly"),
     "s3_list_objects": lazy("mcp_server.s3_reader", "S3ReadOnly"),
+    "partner_document": lazy("mcp_server.partner_reader", "PartnerDocuments"),
 }
 CONFIGURED_BY = {"legal_search": "QDRANT_URL", "web_search": "TAVILY_API_KEY", "qdrant_search": "QDRANT_URL", "qdrant_collection_info": "QDRANT_URL", "postgres_query": "POSTGRES_DSN", "supabase_select": "SUPABASE_URL",
                  "supabase_list_tables": "SUPABASE_URL",
-                 "s3_get_object": "MCP_S3_BUCKETS", "s3_list_objects": "MCP_S3_BUCKETS"}
+                 "s3_get_object": "MCP_S3_BUCKETS", "s3_list_objects": "MCP_S3_BUCKETS",
+                 "partner_document": "PARTNER_S3_BUCKET"}
 
 
 class ToolGateway:
@@ -129,6 +131,15 @@ def build_mcp(gateway):
         Legal originals: prefix = qdrant_search payload s3_prefix + "/source/" (e.g. legal/QH15/2025/144-2025-QH15/source/)."""
         return await gateway.call("s3_list_objects",
                                   lambda c: c.list_objects(bucket, prefix, max_keys, continuation_token))
+
+    @mcp.tool()
+    async def partner_document(key: str, offset: int = 0, max_chars: int = 20000) -> dict:
+        """Read the ORIGINAL contract of the current job from ContractGuard's S3 bucket (read-only).
+        key: context.source_document.source_file_key of the request (quarantine/...); clean_file_key also accepted.
+        Returns extracted text (PDF/DOCX/scan go through the contract extraction/OCR pipeline) from `offset`,
+        at most max_chars (<=50000) characters; call again with next_offset until it is null.
+        Quote contract wording from this text exactly; do not paraphrase it as a quote."""
+        return await gateway.call("partner_document", lambda c: c.read(key, offset, max_chars))
 
     return mcp
 

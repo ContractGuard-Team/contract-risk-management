@@ -69,7 +69,8 @@ class McpGatewayTests(unittest.TestCase):
         self.assertEqual(ready["tools"], {"legal_search": False, "web_search": False, "qdrant_search": False,
                                           "postgres_query": False, "s3_get_object": False,
                                           "s3_list_objects": False, "qdrant_collection_info": False,
-                                          "supabase_select": False, "supabase_list_tables": False})
+                                          "supabase_select": False, "supabase_list_tables": False,
+                                          "partner_document": False})
 
     def test_bind_only_agent_2_and_3(self):
         from agents.hermes.agent_factory import create_agent
@@ -81,9 +82,16 @@ class McpGatewayTests(unittest.TestCase):
                                                                     "qdrant_collection_info",
                                                                     "supabase_select", "supabase_list_tables"})
         self.assertIn("legal_reference", names["agent_3_recommendation"])  # alias of the RAG tool legal_search
+        self.assertIn("partner_document", names["agent_3_recommendation"])
+        self.assertNotIn("partner_document", names["agent_2_risk_scoring"])  # only Agent 3 reads the original
         agent3 = create_agent("agent_3_recommendation", provider=provider)
         bind_mcp_tools(agent3, self.client)
         self.assertEqual(agent3.run_tool("web_search", {"query": "x"})["results"][0]["title"], "t:x")
+        # Tool loop: specs come from the gateway's own tool list, alias renamed for the model.
+        specs = {s["function"]["name"]: s["function"] for s in agent3.tools.specs()}
+        self.assertEqual(set(specs), set(names["agent_3_recommendation"]))
+        self.assertIn("query", specs["legal_reference"]["parameters"]["properties"])
+        self.assertIn("ContractGuard", specs["partner_document"]["description"])
 
 
 class ConnectorTests(unittest.TestCase):
@@ -180,6 +188,45 @@ class ConnectorTests(unittest.TestCase):
             db.query("select 1; delete from laws")
         with self.assertRaises(IntegrationNotConfigured), patch.dict(os.environ, {"POSTGRES_DSN": ""}):
             PostgresConnector()
+
+    def test_partner_document_reads_original_read_only_and_pages(self):
+        import boto3
+        from moto import mock_aws
+        from mcp_server.partner_reader import PartnerDocuments
+        bucket = "contractguard-dev-documents-699061129385"
+        env = {"AWS_ACCESS_KEY_ID": "testing", "AWS_SECRET_ACCESS_KEY": "testing", "AWS_REGION": "ap-southeast-1"}
+
+        class Processor:
+            calls = []
+            def run_job(self, payload):
+                self.calls.append(payload)
+                return {"contract": {"chunks": [{"index": 1, "text": "Điều 2. Phạt"}, {"index": 0, "text": "Điều 1. Giá"}],
+                                     "context": {"preprocessing": {"document": {"page_count": 2}}}}}
+
+        with patch.dict(os.environ, env), mock_aws():
+            s3 = boto3.client("s3", region_name="ap-southeast-1")
+            s3.create_bucket(Bucket=bucket, CreateBucketConfiguration={"LocationConstraint": "ap-southeast-1"})
+            s3.put_object(Bucket=bucket, Key="quarantine/u1/hd.txt", Body="Điều 1. Thanh toán 30 ngày".encode())
+            s3.put_object(Bucket=bucket, Key="quarantine/u1/hd.pdf", Body=b"%PDF-1.7\xff\xfe\x00binary")
+            processor = Processor()
+            reader = PartnerDocuments(bucket, processor=processor)
+            first = reader.read("quarantine/u1/hd.txt", max_chars=8)
+            self.assertEqual((first["text"], first["next_offset"], first["extraction"]), ("Điều 1. ", 8, "utf-8"))
+            rest = reader.read("quarantine/u1/hd.txt", offset=first["next_offset"], max_chars=1000)
+            self.assertEqual(first["text"] + rest["text"], "Điều 1. Thanh toán 30 ngày")
+            self.assertIsNone(rest["next_offset"])
+            pdf = reader.read("quarantine/u1/hd.pdf")  # binary -> input-processing, chunks in order
+            reader.read("quarantine/u1/hd.pdf")        # cached: no second extraction/OCR
+            self.assertEqual((pdf["text"], pdf["page_count"]), ("Điều 1. Giá\nĐiều 2. Phạt", 2))
+            self.assertEqual(len(processor.calls), 1)
+            self.assertEqual(processor.calls[0]["identity"]["job_id"], processor.calls[0]["job"]["contract_id"])
+            for key in ("results/x/request.json", "quarantine/../results/x", "other/a.txt"):
+                with self.assertRaises(ValueError):
+                    reader.read(key)
+            with self.assertRaisesRegex(PermissionError, "read-only"):
+                reader.client.delete_object(Bucket=bucket, Key="quarantine/u1/hd.txt")
+        with patch.dict(os.environ, {"PARTNER_S3_BUCKET": ""}), self.assertRaises(IntegrationNotConfigured):
+            PartnerDocuments()
 
     def test_s3_read_only_list_and_read(self):
         import boto3

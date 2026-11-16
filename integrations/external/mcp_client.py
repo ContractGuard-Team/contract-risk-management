@@ -30,6 +30,23 @@ class McpToolClient:
             raise McpToolError(f"{name}: {text[:500]}")
         return result.structuredContent if result.structuredContent is not None else json.loads(text)
 
+    async def _specs(self, names):
+        from mcp import ClientSession
+        from mcp.client.streamable_http import streamable_http_client
+        headers = {"Authorization": "Bearer " + self.token}
+        async with httpx.AsyncClient(headers=headers, timeout=self.timeout, follow_redirects=False) as http, \
+                streamable_http_client(self.url, http_client=http) as (read, write, _), \
+                ClientSession(read, write) as session:
+            await session.initialize()
+            served = {tool.name: tool for tool in (await session.list_tools()).tools}
+        return {name: {"type": "function", "function": {"name": name, "description": served[mcp_name].description or "",
+                                                         "parameters": served[mcp_name].inputSchema}}
+                for name, mcp_name in names.items() if mcp_name in served}
+
+    def tool_specs(self, names):
+        """{agent tool name: OpenAI function spec} from the gateway's own tool list (name -> MCP tool name)."""
+        return anyio.run(self._specs, dict(names))
+
     def call(self, name, arguments):
         return anyio.run(self._call, name, dict(arguments))
 
@@ -47,4 +64,6 @@ def bind_mcp_tools(agent, client=None):
     names = [name for name in (*MCP_TOOLS, *MCP_ALIASES) if name in agent.tool_functions]
     for name in names:
         agent.tools.register(name, client.handler(MCP_ALIASES.get(name, name)))
+    if names:
+        agent.tools.spec_loader = lambda: client.tool_specs({name: MCP_ALIASES.get(name, name) for name in names})
     return names

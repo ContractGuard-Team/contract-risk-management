@@ -12,7 +12,7 @@ from workers.contracts import SourceError
 class QueueJob:
     job_id: str
     contract_id: str
-    version: str
+    contract_version: str
     source: dict
     runtime_id: str | None
     preprocessing: dict
@@ -36,30 +36,30 @@ class QueueJob:
             raise SourceError("Conflicting runtime_id and runtime-id")
         if runtime is not None and (not isinstance(runtime, str) or not runtime.strip() or len(runtime) > 128):
             raise SourceError("runtime_id must be a non-empty string of at most 128 characters")
-        source = data.get("source", {"type": "s3", "bucket": data.get("s3_bucket", default_bucket),
-                                     "key": data.get("s3_key")})
-        if data.get("s3_version_id") is not None:
-            source = {**source, "version_id": data["s3_version_id"]}
+        # Same field names as ContractGuard's request.json: source_file_key (+ bucket, default WORKER_INPUT_BUCKET).
+        if not isinstance(data.get("source_file_key"), str) or not data["source_file_key"].strip():
+            raise SourceError("source_file_key is required")
+        source = {"type": "s3", "bucket": data.get("bucket", default_bucket), "key": data["source_file_key"]}
         validate_source(source)
         if source["type"] != "s3":
             raise SourceError("Queue worker accepts only S3 sources")
-        preprocess = {key: data[key] for key in ("job_id", "contract_id", "version", "options", "extraction", "source_metadata") if key in data}
-        version = data.get("version", "1")
+        preprocess = {key: data[key] for key in ("job_id", "contract_id", "contract_version", "options", "extraction", "source_metadata") if key in data}
+        version = data.get("contract_version", "1")
         if type(version) not in (str, int) or not str(version).strip():
-            raise SourceError("version must be a non-empty string or integer")
+            raise SourceError("contract_version must be a non-empty string or integer")
         # Preserve opaque options for the HTTP transport; their business validation
         # belongs to the separate preprocessing component.
         for name in ("options", "extraction", "source_metadata"):
             if name in preprocess and not isinstance(preprocess[name], dict):
                 raise SourceError(f"{name} must be an object")
-        preprocess.update(job_id=data["job_id"], contract_id=data["contract_id"].strip(), version=str(version).strip())
+        preprocess.update(job_id=data["job_id"], contract_id=data["contract_id"].strip(), contract_version=str(version).strip())
         context = data.get("context", {})
         if not isinstance(context, dict) or {"workflow", "preprocessing", "worker"} & context.keys():
             raise SourceError("context must be an object without reserved workflow/preprocessing/worker fields")
         info = {**preprocess, "source": source, "context": context, "metadata": data.get("metadata", {})}
         if len(canonical(info).encode("utf-8")) > 32 * 1024:
             raise SourceError("Job metadata exceeds 32 KiB; put document content in S3")
-        return cls(preprocess["job_id"], preprocess["contract_id"], preprocess["version"], source, runtime,
+        return cls(preprocess["job_id"], preprocess["contract_id"], preprocess["contract_version"], source, runtime,
                    preprocess, context, info)
 
 def validate_source(source):

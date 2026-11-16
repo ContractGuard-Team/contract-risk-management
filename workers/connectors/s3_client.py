@@ -46,6 +46,14 @@ class S3Client:
         finally:
             body.close()
 
+    def write_bytes(self, bucket, key, data, content_type="application/octet-stream"):
+        self._connect()
+        self._client.put_object(Bucket=bucket, Key=key, Body=data, ContentType=content_type)
+
+    def delete(self, bucket, key):
+        self._connect()
+        self._client.delete_object(Bucket=bucket, Key=key)  # idempotent: a missing key is not an error
+
     def write_json(self, bucket, key, value):
         from workers.contracts import canonical
         import hashlib

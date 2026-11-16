@@ -9,9 +9,9 @@ def handoff_request(agent, contract, source_name, source, policy, summarizer, co
     context = deepcopy(contract["context"])
     if "workflow" in context:
         raise ValueError("'workflow' is reserved for orchestration context")
-    context["workflow"] = {"contract_id": contract["contract_id"], "version": contract["version"],
+    context["workflow"] = {"contract_id": contract["contract_id"], "contract_version": contract["contract_version"],
                            "cache_key": cache_key, source_name: source}
-    request = AgentRequest(f"contract:{contract['contract_id']} version:{contract['version']}", context)
+    request = AgentRequest(f"contract:{contract['contract_id']} contract_version:{contract['contract_version']}", context)
     if counter(agent.build_messages(request)) <= policy.max_input_tokens:
         return request
     summary = summarizer.summarize(json.dumps(source, ensure_ascii=False),

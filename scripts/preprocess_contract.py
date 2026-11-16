@@ -39,7 +39,7 @@ def main(argv=None):
     parser.add_argument("--languages", help="Installed Tesseract languages, e.g. vie+eng")
     parser.add_argument("--contract-id")
     parser.add_argument("--job-id")
-    parser.add_argument("--version", default="1")
+    parser.add_argument("--contract-version", default="1")
     parser.add_argument("--max-tokens", type=int)
     parser.add_argument("--overlap-tokens", type=int)
     parser.add_argument("--jsonl", action="store_true")
@@ -49,7 +49,7 @@ def main(argv=None):
         parser.error("Choose exactly one job JSON, --text-file or --file")
     try:
         if args.text_file or args.file:
-            job = {"contract_id": args.contract_id, "version": args.version,
+            job = {"contract_id": args.contract_id, "contract_version": args.contract_version,
                    "source": {"type": "local", "path": args.text_file or args.file}}
         else:
             raw = sys.stdin.read() if args.job == "-" else Path(args.job).read_text(encoding="utf-8-sig")

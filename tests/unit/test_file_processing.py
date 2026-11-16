@@ -53,7 +53,7 @@ class FakeOCR:
 
 
 def file_job(filename, **kwargs):
-    return {"job_id": "files-job", "contract_id": "HD-FILE", "version": "1",
+    return {"job_id": "files-job", "contract_id": "HD-FILE", "contract_version": "1",
             **kwargs}
 
 

@@ -8,6 +8,7 @@ import time
 from uuid import uuid4
 
 from botocore.exceptions import ClientError
+from workers.contracts import SourceError
 
 from workers.runtime.job_store import JobStore, LeaseLost
 
@@ -78,9 +79,9 @@ class ContractJobStore(JobStore):
             receipt = self.tables.event(job.job_id, "registered")
             if receipt:
                 if receipt["fingerprint"] != job.fingerprint or receipt["contract_id"] != job.contract_id:
-                    raise ValueError("job_id already exists with different input; submit a new job_id")
+                    raise SourceError("job_id already exists with different input; submit a new job_id")
                 if job.runtime_id is not None and receipt["runtime_id"] != job.runtime_id:
-                    raise ValueError("job_id already belongs to another runtime_id")
+                    raise SourceError("job_id already belongs to another runtime_id")
                 completed = self.tables.event(job.job_id, "completed")
                 if completed:
                     return {**receipt, "status": "completed", "output": completed["output"]}
