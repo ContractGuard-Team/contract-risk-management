@@ -51,7 +51,11 @@ class CurrentClient:
         return {**row, "job_id": row["active_job_id"]}
 
     def get(self, job_id):
-        row = self.tables.get(self.tables.jobs_table, self.locate(job_id))
+        try:
+            key = self.locate(job_id)
+        except LeaseLost:
+            return None  # never registered (e.g. rejected before reserve): no row, like any unknown job
+        row = self.tables.get(self.tables.jobs_table, key)
         return self.logical(row) if row and row.get("active_job_id") == job_id else None
 
     def operation(self, job_id, *, expression, condition, names, values):

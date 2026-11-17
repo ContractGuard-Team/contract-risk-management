@@ -10,6 +10,7 @@ class ProcessingServiceClient(ServiceClient):
                             "metadata": file.metadata}}
         result = self.run_job(payload, guard=guard)
         contract = result.get("contract")
-        if not isinstance(contract, dict) or contract.get("contract_id") != job.contract_id:
-            raise ValueError("Preprocessing returned another contract")
+        if (not isinstance(contract, dict) or contract.get("contract_id") != job.contract_id
+                or str(contract.get("contract_version")) != job.contract_version):
+            raise ValueError("Preprocessing returned another contract or contract_version")
         return contract

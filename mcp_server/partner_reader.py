@@ -15,7 +15,7 @@ from mcp_server.s3_reader import _refuse_writes
 
 PREFIXES = ("quarantine/", "clean/")
 MAX_BYTES = 20 * 1024 * 1024  # same limit as input-processing
-MAX_CHARS = 50_000            # per call; the agent pages with offset
+MAX_CHARS = 15_000            # per call, so the whole page fits the agent's tool-result limit; page with offset
 CACHE_SIZE = 8
 
 
@@ -65,8 +65,11 @@ class PartnerDocuments:
         return "\n".join(c["text"] for c in chunks), {"extraction": "input-processing",
                                                       "page_count": document.get("page_count")}
 
-    def read(self, key, offset=0, max_chars=20_000):
+    def read(self, key, offset=0, max_chars=MAX_CHARS, *, allowed=()):
+        """allowed: the keys of the calling job (request.json); any other document is refused."""
         key = _key(key)
+        if key not in allowed:
+            raise PermissionError("key is not a document of this job (use context.request.source_file_key)")
         offset, max_chars = max(0, int(offset)), max(1, min(int(max_chars), MAX_CHARS))
         obj = self.client.get_object(Bucket=self.bucket, Key=key)
         data = obj["Body"].read(MAX_BYTES + 1)

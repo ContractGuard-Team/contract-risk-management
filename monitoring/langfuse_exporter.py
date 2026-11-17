@@ -29,7 +29,9 @@ def otlp(event):
     # Langfuse rejects environments outside this pattern; local fixture traces stay separate from production.
     if re.fullmatch(r"(?!langfuse)[a-z0-9_-]{1,40}", environment):
         attrs["langfuse.environment"] = environment
-    usage = {key: event[field] for key, field in (("input", "input_tokens"), ("output", "output_tokens"), ("total", "total_tokens")) if field in event}
+    usage = {key: event[field] for key, field in (("input", "input_tokens"), ("output", "output_tokens"), ("total", "total_tokens"),
+                                                 ("input_cache_read", "cache_read_tokens"),
+                                                 ("output_reasoning", "reasoning_tokens")) if field in event}
     if usage:
         attrs["langfuse.observation.usage_details"] = json.dumps(usage)
     span = {"traceId": trace, "spanId": event["event_id"][:16], "name": event["service"] + "." + event["stage"], "kind": 1,

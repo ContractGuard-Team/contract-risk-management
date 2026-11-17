@@ -56,7 +56,10 @@ class QueueJob:
         context = data.get("context", {})
         if not isinstance(context, dict) or {"workflow", "preprocessing", "worker"} & context.keys():
             raise SourceError("context must be an object without reserved workflow/preprocessing/worker fields")
-        info = {**preprocess, "source": source, "context": context, "metadata": data.get("metadata", {})}
+        metadata = data.get("metadata", {})
+        if not isinstance(metadata, dict):
+            raise SourceError("metadata must be an object")
+        info = {**preprocess, "source": source, "context": context, "metadata": metadata}
         if len(canonical(info).encode("utf-8")) > 32 * 1024:
             raise SourceError("Job metadata exceeds 32 KiB; put document content in S3")
         return cls(preprocess["job_id"], preprocess["contract_id"], preprocess["contract_version"], source, runtime,

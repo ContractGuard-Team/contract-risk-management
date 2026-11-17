@@ -278,3 +278,11 @@
 - Đã bỏ 2 câu hướng dẫn viết cứng trong `agents/base.py`: nay là `prompts/fix_format.md` (3 agent) và `prompts/reevaluate.md` (Agent 2/3), `config_loader.follow_up_prompt` chỉ điền `{problems}`/`{gaps}`; thiếu file khi cần → `TODO: fill`. Còn lại trong code chỉ là nhãn (`# Rules`, `# Examples`, `# Output schema`), JSON Schema sinh từ model và mô tả tool MCP.
 - Agent 3: MCP nối 2 bucket — đối tác (`partner_document`) và S3 pháp luật (`s3_list_objects`/`s3_get_object`); prompt service đã ghi rõ cách dùng từng bucket. 219/219 unit test.
 
+## Sửa lỗi theo báo cáo rà luồng (2026-11-17, mới nhất)
+
+- Worker: `CurrentClient.get` trả None cho job chưa đăng ký (trước đây ném LeaseLost nên không gửi được `failed`); `metadata` phải là object; kết quả input-processing phải đúng cả `contract_version`.
+- Data pipeline (mục cuối `docs/data_pipeline_design.md`): collector bù job thiếu, retry kiểm hash, `apply_amendment` hoàn tác khi lỗi.
+- Extraction: không tính điểm verdict trích sai, trùng clause_id → lỗi, kẹp trang. Agent: kết quả tool rút ngắn giữ JSON, ngân sách kiểm lại trong vòng tool, handoff nén kèm `ids` (mục cuối `docs/agent_core.md`).
+- MCP: `partner_document` chỉ đọc key của job (header `x-job-context`), event MCP có job/trace id (mục cuối `docs/mcp.md`). Monitoring giữ `cache_read_tokens`, `reasoning_tokens`.
+- `configs/memory.yaml` VẪN TRỐNG có chủ đích: ngân sách phụ thuộc context window của model OpenAI người dùng chọn. 236/236 unit test; chưa build/chạy lại container cho đợt này.
+

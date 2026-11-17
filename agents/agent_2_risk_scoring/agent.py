@@ -11,8 +11,10 @@ from agents.agent_2_risk_scoring.tools.risk_calculator import risk_calculator
 
 
 def clause_ids(request) -> set:
-    """Clause ids Agent 1 returned for this contract (from context.workflow.classification); empty when compacted."""
+    """Clause ids Agent 1 returned for this contract (context.workflow.classification, or its `ids` when compacted)."""
     aggregate = (request.context.get("workflow") or {}).get("classification") or {}
+    if aggregate.get("compacted"):
+        return set(aggregate.get("ids") or [])
     ids = set()
     for chunk in aggregate.get("chunks") or []:
         output = parse_json((chunk.get("result") or {}).get("text"))
@@ -39,7 +41,7 @@ class RiskScoringAgent(BaseAgent):
         problems += [f"check {c['check_code']} trỏ tới finding không tồn tại {c['finding_id']}"
                      for c in data["checks"] if c["finding_id"] and c["finding_id"] not in finding_ids]
         known = clause_ids(request)
-        if known:  # compacted Agent 1 input: ids cannot be cross-checked
+        if known:
             used = {v["clause_id"] for v in data["clause_verdicts"]}
             for finding in data["findings"]:
                 used |= {finding["clause_id"]} - {None} | {e["clause_id"] for e in finding["evidence"]}

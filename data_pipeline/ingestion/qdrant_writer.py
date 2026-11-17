@@ -6,6 +6,7 @@ Strict mode rejects filters on unindexed payload fields, so every filtered field
 """
 import os
 
+from data_pipeline.ingestion.chunker import embedding_parts
 from data_pipeline.router.collection_mapper import payload, point_id
 from integrations.external.embedding_client import SPARSE_VECTOR, sparse_vector
 
@@ -69,6 +70,23 @@ class QdrantWriter:
     def retire(self, symbol, article_no, valid_to=None):
         self.client.set_payload(self.collection, {"current": False, "valid_to": valid_to}, wait=True,
                                 points=self._filter(symbol=symbol, article_no=article_no, current=True))
+
+    def _ids(self, symbol, rows):
+        # Same ids upsert() gave these article versions (deterministic): no date filter needed.
+        return [point_id(symbol, r["article_no"], r.get("valid_from"), part)
+                for r in rows for part in range(len(embedding_parts(r)))]
+
+    def drop_versions(self, symbol, rows):
+        """Remove the points of article versions written by a failed amendment (missing points are ignored)."""
+        if rows:
+            self.client.delete(self.collection, points_selector=self.models.PointIdsList(points=self._ids(symbol, rows)),
+                               wait=True)
+
+    def reopen_versions(self, symbol, rows):
+        """Make retired article versions current again (undo of retire)."""
+        if rows:
+            self.client.set_payload(self.collection, {"current": True, "valid_to": None},
+                                    points=self._ids(symbol, rows), wait=True)
 
     def set_status(self, symbol, status, **fields):
         self.client.set_payload(self.collection, {"status": status, **fields}, points=self._filter(symbol=symbol), wait=True)

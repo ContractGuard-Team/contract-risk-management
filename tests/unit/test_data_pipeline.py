@@ -309,6 +309,59 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual((version["state"], version["source_urls"]), ("processed", [base[1][1]["files"][0]]))
         self.assertTrue(self.points(symbol="61/2020/QH14"))
 
+    def test_version_saved_without_its_job_gets_the_job_on_the_next_scan(self):
+        base = doc("1", "61/2020/QH14", "Luật Đầu tư", "Luật", "2021-01-01", BASE_LAW)
+        with patch.object(self.store, "add_job", side_effect=RuntimeError("crash after add_version")):
+            run = asyncio.run(collect("full", source=FakeSource(dict([base])), store=self.store, archiver=self.archiver,
+                                      today=self.today))
+        self.assertEqual(run["failed"], 1)
+        self.assertEqual((len(self.store.select("legal_document_versions", {})), self.job_states()), (1, []))
+        run = asyncio.run(collect("full", source=FakeSource(dict([base])), store=self.store, archiver=self.archiver,
+                                  today=self.today))
+        self.assertEqual((run["unchanged"], self.job_states()), (1, ["pending"]))  # the processor service takes it
+        run = asyncio.run(collect("full", source=FakeSource(dict([base])), store=self.store, archiver=self.archiver,
+                                  today=self.today))
+        self.assertEqual(self.job_states(), ["pending"])  # never a second job for the same version
+
+    def test_retry_refuses_bytes_that_no_longer_match_the_stored_version(self):
+        base = doc("1", "61/2020/QH14", "Luật Đầu tư", "Luật", "2021-01-01", BASE_LAW)
+        self.collect([base], "full", process=lambda job, files: None)  # job queued, not processed
+        self.store.update("ingest_jobs", {}, {"state": "pending"})
+        self.ctx.fetch = lambda urls: [("changed.pdf", b"%PDF-1.7 another file")]
+        with patch("data_pipeline.processor.process_files", side_effect=AssertionError("must not process")):
+            self.assertEqual(process_pending(self.ctx), {"failed": 1})
+        self.assertEqual(self.store.select("ingest_jobs", {})[0]["error_type"], "SourceChanged")
+
+    def test_failed_amendment_keeps_the_current_article(self):
+        base = doc("1", "61/2020/QH14", "Luật Đầu tư", "Luật", "2021-01-01", BASE_LAW)
+        amend = doc("9", "90/2025/QH15", "Luật sửa đổi, bổ sung một số điều của Luật Đầu tư", "Luật", "2025-07-01", AMENDMENT)
+        self.collect([base], "full")
+        base_id = self.store.document_by_symbol("61/2020/QH14")["id"]
+        before = {a["article_no"]: a["text"] for a in self.store.current_articles(base_id)}
+        index = self.ctx.qdrant.upsert
+        calls = []
+
+        def failing(document, rows, *args, **kwargs):  # the base law indexes fine, the amendment's new versions do not
+            if document["symbol"] == "61/2020/QH14" and any(r.get("amended_by") for r in rows):
+                calls.append(1)
+                index(document, rows, *args, **kwargs)  # partly written before the failure
+                raise RuntimeError("Qdrant outage")
+            return index(document, rows, *args, **kwargs)
+        with patch.object(self.ctx.qdrant, "upsert", side_effect=failing), patch("data_pipeline.processor.log"):
+            self.collect([amend, base], "full")
+        self.assertTrue(calls)
+        after = {a["article_no"]: a["text"] for a in self.store.current_articles(base_id)}
+        self.assertEqual(after, before)  # every article still has exactly its old current version
+        self.assertEqual(len(self.points(symbol="61/2020/QH14", article_no="4", current=True)), 1)
+        self.assertFalse([p for p in self.points(symbol="61/2020/QH14") if p.payload.get("amended_by")])
+        # Retry (job back to pending) applies the amendment cleanly from the same state.
+        source = FakeSource(dict([amend, base]))
+        self.ctx.fetch = lambda urls: [(safe_name(u), asyncio.run(source.download(u))) for u in urls]
+        self.assertEqual(process_pending(self.ctx).get("done"), 1)
+        article4 = [a for a in self.store.current_articles(base_id) if a["article_no"] == "4"]
+        self.assertEqual(len(article4), 1)
+        self.assertIn("2a. Khoản hai a.", article4[0]["text"])
+
     def test_collector_consumes_sqs_and_deletes_only_after_success(self):
         sqs = boto3.client("sqs", region_name="ap-southeast-1")
         queue = sqs.create_queue(QueueName="contract-data-update-queue")["QueueUrl"]

@@ -76,6 +76,9 @@ class Store:
     def close_article(self, article_id, valid_to):
         self.update("legal_articles", {"id": article_id}, {"is_current": False, "valid_to": valid_to})
 
+    def reopen_article(self, article_id):
+        self.update("legal_articles", {"id": article_id}, {"is_current": True, "valid_to": None})
+
     def flag_article(self, article_id, **fields):
         self.update("legal_articles", {"id": article_id}, fields)
 

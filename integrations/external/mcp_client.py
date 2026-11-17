@@ -16,10 +16,17 @@ class McpToolClient:
         self.token = token or os.environ["MCP_API_TOKEN"]
         self.timeout = timeout
 
+    def _headers(self):
+        from agents.shared.tools import JOB_CONTEXT
+        headers = {"Authorization": "Bearer " + self.token}
+        if JOB_CONTEXT.get():
+            headers["x-job-context"] = json.dumps(JOB_CONTEXT.get())  # ASCII JSON: a valid header value
+        return headers
+
     async def _call(self, name, arguments):
         from mcp import ClientSession
         from mcp.client.streamable_http import streamable_http_client
-        headers = {"Authorization": "Bearer " + self.token}
+        headers = self._headers()
         async with httpx.AsyncClient(headers=headers, timeout=self.timeout, follow_redirects=False) as http, \
                 streamable_http_client(self.url, http_client=http) as (read, write, _), \
                 ClientSession(read, write) as session:

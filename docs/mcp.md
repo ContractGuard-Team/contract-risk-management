@@ -156,3 +156,11 @@ lỗi khác chỉ trả tên lớp lỗi, không trả nội dung/credential.
 - Kiểm chứng: unit test Moto (phân trang, binary → input-processing, cache, key sai, chặn ghi); chạy thật trong stack thử:
   DOCX qua input-processing container trả đúng nguyên văn; container agent-3 lấy 10 spec tool từ MCP qua mạng
   (có `partner_document`, `legal_reference`). Chưa đọc bucket ContractGuard thật (local không có credential role).
+
+## Ràng buộc partner_document theo job + định danh trong event (2026-11-17)
+
+- Agent service đặt `JOB_CONTEXT` (identity của job + `partner_keys` = source/clean key trong `context.request`) cho mỗi
+  lần chạy; `McpToolClient` gửi nó trong header `x-job-context`. Gateway đọc header qua `Context` của FastMCP:
+  `partner_document` chỉ đọc key thuộc `partner_keys` (khác → `PermissionError`, kể cả khi IAM cho đọc); mọi event
+  `mcp.tool.*` gắn `job_id`/`runtime_id`/`contract_id`/`trace_id`/`request_id`.
+- `partner_document` trả tối đa 15.000 ký tự/lần để vừa giới hạn kết quả tool của agent (không bị cắt mất `next_offset`).

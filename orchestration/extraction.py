@@ -27,12 +27,19 @@ def _merge_chunks(aggregate):
     for chunk in aggregate["chunks"]:
         out = agent_output(AGENT_1, chunk["result"])
         languages.add(out["language"])
+        # Pages come from preprocessing, not from the model: keep each clause inside its chunk's pages
+        # (TXT/DOCX have no physical pages -> page 1).
+        pages = [p for p in (chunk.get("metadata") or {}).get("pages") or [] if isinstance(p, int) and p > 0] or [1]
         for clause in out["clauses"]:
+            clause = {**clause, "page_start": min(max(clause["page_start"], min(pages)), max(pages)),
+                      "page_end": min(max(clause["page_end"], min(pages)), max(pages))}
             current = clauses.get(clause["clause_id"])
             if current is None:
                 clauses[clause["clause_id"]] = {**clause, "facts": list(clause["facts"])}
                 continue
-            # Same id again = the clause continues across a chunk boundary: one clause, text in document order.
+            if not clause["continuation"]:
+                raise ValueError(f"Agent 1 used clause_id {clause['clause_id']} for two different clauses")
+            # The clause continues across a chunk boundary: one clause, text in document order.
             current["text"] += "\n" + clause["text"]
             current["page_end"] = max(current["page_end"], clause["page_end"])
             current["complete"] = clause["complete"]
@@ -124,8 +131,17 @@ def build_extraction(contract, results, *, job_id, trace, policy=None):
         fact["evidence"] = _evidence(fact["evidence"], clauses, notes)
         if fact["status"] == "FOUND" and not fact["evidence"]:
             fact["status"] = "UNKNOWN"  # a value we cannot point to in the contract is not FOUND
+    # Only verdicts whose quote is really in their clause may raise the score (same check as finding evidence).
+    def quoted(item, clause_id):
+        ok = clause_id in clauses and normalize(item["evidence_quote"]) in normalize(clauses[clause_id]["text"])
+        notes["dropped_verdicts"] += not ok
+        return ok
+    notes["dropped_verdicts"] = 0
+    verdicts = [{**item, "verdicts": [v for v in item["verdicts"] if quoted(v, item["clause_id"])],
+                 "additional": [a for a in item["additional"] if quoted(a, item["clause_id"])]}
+                for item in risk["clause_verdicts"]]
     scored = score_contract([{"clause_id": cid, "category": c["category"], "text": c["text"]} for cid, c in clauses.items()],
-                            risk["clause_verdicts"], policy)
+                            verdicts, policy)
     notes["scoring_detail"] = scored["detail"]
 
     context = contract.context
@@ -133,8 +149,8 @@ def build_extraction(contract, results, *, job_id, trace, policy=None):
     document_info = preprocessing.get("document") or {}
     file_format = str(document_info.get("format") or "").lower()
     document = {"file_type": FILE_TYPES.get(file_format, file_format or "unknown"),
-                # shortcut: TXT/DOCX have no physical pages; 1 or the last page seen until the partner defines it.
-                "page_count": max(1, document_info.get("page_count") or max(c["page_end"] for c in clauses.values())),
+                # shortcut: TXT/DOCX have no physical pages (clauses are on page 1) until the partner defines it.
+                "page_count": max(1, document_info.get("page_count") or 1, max(c["page_end"] for c in clauses.values())),
                 "language": languages.pop() if len(languages) == 1 else "mixed",
                 "is_scanned": bool((preprocessing.get("extraction") or {}).get("ocr_segments"))}
     request = context.get("request") or {}  # every field ContractGuard sent (absent for internal jobs)

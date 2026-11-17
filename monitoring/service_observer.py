@@ -11,7 +11,8 @@ class SafeObservation(NullObservation):
 
     def update(self, **kwargs):
         usage = kwargs.get("usage_details", {})
-        for source, target in (("input", "input_tokens"), ("output", "output_tokens"), ("total", "total_tokens")):
+        for source, target in (("input", "input_tokens"), ("output", "output_tokens"), ("total", "total_tokens"),
+                               ("input_cache_read", "cache_read_tokens"), ("output_reasoning", "reasoning_tokens")):
             value = usage.get(source)
             if type(value) in (int, float) and value >= 0:
                 self.fields[target] = value

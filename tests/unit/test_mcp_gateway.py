@@ -210,19 +210,23 @@ class ConnectorTests(unittest.TestCase):
             s3.put_object(Bucket=bucket, Key="quarantine/u1/hd.pdf", Body=b"%PDF-1.7\xff\xfe\x00binary")
             processor = Processor()
             reader = PartnerDocuments(bucket, processor=processor)
-            first = reader.read("quarantine/u1/hd.txt", max_chars=8)
+            mine = ["quarantine/u1/hd.txt", "quarantine/u1/hd.pdf"]  # this job's keys (request.json)
+            first = reader.read("quarantine/u1/hd.txt", max_chars=8, allowed=mine)
             self.assertEqual((first["text"], first["next_offset"], first["extraction"]), ("Điều 1. ", 8, "utf-8"))
-            rest = reader.read("quarantine/u1/hd.txt", offset=first["next_offset"], max_chars=1000)
+            rest = reader.read("quarantine/u1/hd.txt", offset=first["next_offset"], max_chars=1000, allowed=mine)
             self.assertEqual(first["text"] + rest["text"], "Điều 1. Thanh toán 30 ngày")
             self.assertIsNone(rest["next_offset"])
-            pdf = reader.read("quarantine/u1/hd.pdf")  # binary -> input-processing, chunks in order
-            reader.read("quarantine/u1/hd.pdf")        # cached: no second extraction/OCR
+            pdf = reader.read("quarantine/u1/hd.pdf", allowed=mine)  # binary -> input-processing, chunks in order
+            reader.read("quarantine/u1/hd.pdf", allowed=mine)        # cached: no second extraction/OCR
+            s3.put_object(Bucket=bucket, Key="quarantine/u2/other.txt", Body=b"another tenant's contract")
+            with self.assertRaisesRegex(PermissionError, "not a document of this job"):
+                reader.read("quarantine/u2/other.txt", allowed=mine)  # readable by IAM, not by this job
             self.assertEqual((pdf["text"], pdf["page_count"]), ("Điều 1. Giá\nĐiều 2. Phạt", 2))
             self.assertEqual(len(processor.calls), 1)
             self.assertEqual(processor.calls[0]["identity"]["job_id"], processor.calls[0]["job"]["contract_id"])
             for key in ("results/x/request.json", "quarantine/../results/x", "other/a.txt"):
                 with self.assertRaises(ValueError):
-                    reader.read(key)
+                    reader.read(key, allowed=[key])
             with self.assertRaisesRegex(PermissionError, "read-only"):
                 reader.client.delete_object(Bucket=bucket, Key="quarantine/u1/hd.txt")
         with patch.dict(os.environ, {"PARTNER_S3_BUCKET": ""}), self.assertRaises(IntegrationNotConfigured):

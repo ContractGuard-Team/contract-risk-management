@@ -13,6 +13,7 @@ import logging
 import time
 
 from data_pipeline.ingestion.chunker import embedding_parts, split_articles
+from data_pipeline.processing.deduplicator import sha256
 from data_pipeline.processing.normalizer import clean_pages
 from data_pipeline.processing.validator import validate
 from data_pipeline.telemetry import elapsed_ms, report, run_trace
@@ -55,17 +56,38 @@ def _flag(ctx, target, article_no):
 def apply_amendment(ctx, target, op, source, effective_on):
     current = {a["article_no"]: a for a in ctx.store.current_articles(target["id"])}
     closed, new = apply_instruction(current, op)  # raises Unresolvable before anything is written
-    for article in closed:
-        ctx.store.close_article(article["id"], effective_on)
-        ctx.qdrant.retire(target["symbol"], article["article_no"], effective_on)
     # A pending (unapplied) amendment of this article must stay visible on its new version.
     pending = {a["article_no"] for a in closed if a.get("has_pending_amendment")}
-    rows = ctx.store.add_articles([{**{k: n.get(k) for k in ARTICLE_FIELDS}, "document_id": target["id"],
-                                    "version": target.get("current_version") or 1, "valid_from": effective_on,
-                                    "is_current": True, "amended_by": source["id"],
-                                    "has_pending_amendment": n["article_no"] in pending,
-                                    "legal_references": legal_references(n["text"], target["symbol"])} for n in new])
-    index(ctx, target, rows, amended_by=source["symbol"])
+    retired, rows = [], []
+    try:
+        for article in closed:
+            ctx.store.close_article(article["id"], effective_on)
+            retired.append(article)
+            ctx.qdrant.retire(target["symbol"], article["article_no"], effective_on)
+        rows = ctx.store.add_articles([{**{k: n.get(k) for k in ARTICLE_FIELDS}, "document_id": target["id"],
+                                        "version": target.get("current_version") or 1, "valid_from": effective_on,
+                                        "is_current": True, "amended_by": source["id"],
+                                        "has_pending_amendment": n["article_no"] in pending,
+                                        "legal_references": legal_references(n["text"], target["symbol"])} for n in new])
+        index(ctx, target, rows, amended_by=source["symbol"])
+    except Exception:
+        _undo_amendment(ctx, target, retired, rows)
+        raise
+
+
+def _undo_amendment(ctx, target, retired, written):
+    """Supabase and Qdrant share no transaction: put back what one failed amendment changed, so the article keeps
+    its current version and the retry starts from the same state (no "target article not found")."""
+    try:
+        for row in written:  # [valid_from, valid_from): a version that was never in force
+            ctx.store.close_article(row["id"], row["valid_from"])
+        ctx.qdrant.drop_versions(target["symbol"], written)
+        for article in retired:
+            ctx.store.reopen_article(article["id"])
+        ctx.qdrant.reopen_versions(target["symbol"], retired)
+    except Exception as exc:  # the caller re-raises the original error; a person must check this article
+        log.error("could not undo the amendment of %s (%s): check its current articles", target["symbol"],
+                  type(exc).__name__)
 
 
 def _replace(ctx, new_document, old):
@@ -226,7 +248,15 @@ def process_files(ctx, job, files, max_attempts=3):
 def process_job(ctx, job):
     """Retry path: fetch the files again from the source web site (never from S3) and process them."""
     version = ctx.store.version_by_sha(job["sha256"])
-    return process_files(ctx, job, ctx.fetch(version["source_urls"]))
+    files = ctx.fetch(version["source_urls"])
+    if [sha256(data) for _, data in files] != version["file_hashes"]:
+        # The site now serves other bytes: processing them under this version would make Supabase/Qdrant
+        # disagree with the original kept on S3. The collector stores the new file as a new version.
+        ctx.store.update_job(job["id"], state="failed", error_type="SourceChanged")
+        report("process", "failed", f"{job['docid']}: source file changed since collection; the next crawl "
+               "collects it as a new version", level=logging.WARNING)
+        return "failed"
+    return process_files(ctx, job, files)
 
 
 def process_pending(ctx, limit=20):

@@ -131,12 +131,12 @@ class ExtractionTests(unittest.TestCase):
         quote = "phạt 8% giá trị phần nghĩa vụ vi phạm"
         self.results = {
             "agent_1_classification": {"chunks": [
-                {"chunk_id": "k0", "result": result("agent_1_classification", agent_1("k0", [
+                {"chunk_id": "k0", "metadata": {"pages": [1]}, "result": result("agent_1_classification", agent_1("k0", [
                     clause(1, "Điều 1. Giá trị hợp đồng là 100 triệu đồng.", "compensation_and_payment"),
                     clause(2, "Điều 2. Bên B chịu", "breach_and_liabilities", complete=False)],
                     fact_values={"payment_term_days": {"status": "FOUND", "value": 30, "evidence": [
                         {"clause_id": f"{CID}-C0001", "page": 1, "quote": "không có trong văn bản"}]}}))},
-                {"chunk_id": "k1", "result": result("agent_1_classification", agent_1("k1", [
+                {"chunk_id": "k1", "metadata": {"pages": [2, 3]}, "result": result("agent_1_classification", agent_1("k1", [
                     clause(2, f"{quote}.", "breach_and_liabilities", page=2, continuation=True),
                     clause(3, "Điều 3. Tranh chấp giải quyết tại tòa án.", "general_and_boilerplate", page=3)],
                     corrections=[{"clause_id": f"{CID}-C0003", "category": "dispute_and_governing_law",
@@ -201,6 +201,31 @@ class ExtractionTests(unittest.TestCase):
         self.assertEqual(notes["scoring_detail"]["missing_section_rules"], ["M02"])
         self.assertEqual(extraction["scoring"]["overall_score"], 10)  # R10 confirmed (5) + M02 (5)
         self.assertEqual((extraction["tenant_id"], extraction["output_language"], extraction["trace"]), ("org-1", "vi", TRACE))
+
+    def test_verdict_with_a_quote_outside_its_clause_never_scores(self):
+        risk = json.loads(self.results["agent_2_risk_scoring"]["text"])
+        risk["clause_verdicts"][0]["verdicts"].append(
+            {"rule_id": "R03", "verdict": "confirmed", "evidence_quote": "bồi hoàn mọi thiệt hại", "rationale": "x"})
+        self.results["agent_2_risk_scoring"] = result("agent_2_risk_scoring", risk)
+        extraction, notes = build_extraction(contract(), self.results, job_id=JOB, trace=TRACE)
+        self.assertEqual((extraction["scoring"]["overall_score"], notes["dropped_verdicts"]), (10, 1))  # not 15
+
+    def test_reused_clause_id_without_continuation_is_an_error(self):
+        chunks = self.results["agent_1_classification"]["chunks"]
+        second = json.loads(chunks[1]["result"]["text"])
+        second["clauses"][0]["continuation"] = False
+        chunks[1]["result"] = result("agent_1_classification", second)
+        with self.assertRaisesRegex(ValueError, "two different clauses"):
+            build_extraction(contract(), self.results, job_id=JOB, trace=TRACE)
+
+    def test_clause_pages_stay_inside_their_chunk(self):
+        chunks = self.results["agent_1_classification"]["chunks"]
+        second = json.loads(chunks[1]["result"]["text"])
+        second["clauses"][1].update(page_start=99, page_end=99)
+        chunks[1]["result"] = result("agent_1_classification", second)
+        extraction, _ = build_extraction(contract(), self.results, job_id=JOB, trace=TRACE)
+        self.assertEqual(extraction["clauses"][2]["location"]["page_start"], 3)
+        self.assertEqual(extraction["document"]["page_count"], 3)
 
     def test_every_finding_needs_a_recommendation(self):
         advice = json.loads(self.results["agent_3_recommendation"]["text"])

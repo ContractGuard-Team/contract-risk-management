@@ -7,6 +7,7 @@ from common.exceptions import ModelResponseError
 from common.ports.model_provider import ModelProvider
 from common.schemas.agent_messages import AgentRequest, AgentResult
 from agents.hermes.config_loader import follow_up_prompt, load_prompts
+from agents.hermes.context_budget import ContextBudgetExceeded
 from agents.hermes.tool_registry import ToolRegistry
 from agents.shared.output import model_errors, parse_json
 from monitoring.observer import NullObserver
@@ -25,6 +26,48 @@ def evidence_gaps(text) -> list:
     data = parse_json(text)
     gaps = data.get(EVIDENCE_GAPS) if data is not None else None
     return [gap for gap in gaps if gap] if isinstance(gaps, list) else []
+
+
+DROPPED_TOOL_RESULT = json.dumps({"error": "DroppedForBudget",
+                                  "message": "removed to stay within the input budget; call the tool again if needed"})
+
+
+def _shorten(value, cap):
+    if isinstance(value, str):
+        return value if len(value) <= cap else value[:cap] + "...[truncated]"
+    if isinstance(value, dict):
+        return {key: _shorten(item, cap) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_shorten(item, cap) for item in value]
+    return value
+
+
+def fit_tool_result(result, limit=MAX_TOOL_RESULT_CHARS) -> str:
+    """JSON text of a tool result within `limit`: long strings are shortened, so the JSON stays valid and small
+    fields such as next_offset survive. Too many items to fit -> an error the model can act on."""
+    text = json.dumps(result, ensure_ascii=False, default=str)
+    cap = limit
+    while len(text) > limit and cap > 50:
+        cap //= 2
+        text = json.dumps(_shorten(result, cap), ensure_ascii=False, default=str)
+    if len(text) > limit:
+        return json.dumps({"error": "ResultTooLarge", "message": "narrow the query or page with offset/limit"})
+    return text
+
+
+def keep_in_budget(transcript, start, memory):
+    """Tool results and follow-ups grow the transcript after memory.prepare(): drop the oldest tool results of this
+    run first; still too big -> a clear error instead of a provider rejection."""
+    if memory is None:
+        return
+    limit = memory.policy.max_input_tokens
+    for message in transcript[start:]:
+        if memory.counter(transcript) <= limit:
+            return
+        if message.get("role") == "tool":
+            message["content"] = DROPPED_TOOL_RESULT
+    if memory.counter(transcript) > limit:
+        raise ContextBudgetExceeded("Tool results and follow-ups exceed this agent's input budget")
 
 
 def add_usage(total: dict, usage: dict) -> dict:
@@ -122,10 +165,7 @@ class BaseAgent:
             result = self.run_tool(call["name"], arguments, observer=observer)
         except Exception as exc:  # unknown tool, bad arguments, connector not configured, upstream failure
             result = {"error": type(exc).__name__, "message": str(exc)[:500]}
-        text = json.dumps(result, ensure_ascii=False, default=str)
-        if len(text) > MAX_TOOL_RESULT_CHARS:  # shortcut: hard cut; page large sources via the tool's own offset
-            text = text[:MAX_TOOL_RESULT_CHARS] + "...[truncated]"
-        return text
+        return fit_tool_result(result)
 
     def _generate(self, messages, tools, *, final):
         kwargs = {"inference_config": deepcopy(self.inference_config)}
@@ -149,6 +189,7 @@ class BaseAgent:
             transcript, usage = list(messages), {}
             rounds = reevaluations = tool_calls = fixes = 0
             while True:
+                keep_in_budget(transcript, len(messages), memory)
                 response = self._generate(transcript, tools, final=rounds >= MAX_TOOL_ROUNDS)
                 add_usage(usage, response.usage)  # billed even when the response is rejected below
                 if response.tool_calls:

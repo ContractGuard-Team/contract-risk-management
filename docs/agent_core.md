@@ -122,3 +122,13 @@ EC2 cần chuyển sang kho dùng chung.
   của agent 1. Tổng 170/170 unit test.
 - Image agent-1/2/3 + langgraph build lại, 9/9 healthy; agent-1 tạo `/data/long_term_memory/agent_1_classification.sqlite3`,
   agent-2 tạo `.../agent_2_risk_scoring.sqlite3` trên volume riêng (rỗng).
+
+## Sửa lỗi vòng tool / handoff (2026-11-17)
+
+- Kết quả tool quá 20.000 ký tự: rút ngắn từng chuỗi (JSON vẫn hợp lệ, giữ `next_offset`); quá nhiều phần tử → lỗi
+  `ResultTooLarge` cho model.
+- Ngân sách token kiểm lại trước mỗi lần gọi model trong vòng tool/sửa format/đánh giá lại: bỏ kết quả tool cũ trước,
+  vẫn vượt → `ContextBudgetExceeded`.
+- Handoff bị nén kèm `ids` (mọi clause_id cho Agent 2, mọi finding_id cho Agent 3) để kiểm chéo vẫn chạy.
+- Kết quả cuối: verdict có trích dẫn không nằm trong điều khoản không được tính điểm (`dropped_verdicts`); trùng
+  `clause_id` mà không phải nối tiếp → lỗi; trang điều khoản kẹp trong trang của chunk (TXT/DOCX = trang 1).

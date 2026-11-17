@@ -3,7 +3,7 @@
 ## Đầu vào (tin nhắn user, JSON)
 - `context.workflow.risk_scoring`: kết quả của Agent 2 — kiểm chứng rule trên từng điều khoản (verdict, nguyên văn,
   lý do), điểm rủi ro toàn hợp đồng và theo nhóm, loại rủi ro đã xác định, căn cứ và `evidence_gaps` của Agent 2.
-  Nếu có `compacted: true` thì đây là bản tóm tắt.
+  Nếu có `compacted: true` thì đây là bản tóm tắt kèm `ids` (đủ mọi `finding_id`: mỗi mã phải có một đề xuất).
 - `context.request`: toàn bộ phiếu việc ContractGuard — khóa tài liệu gốc trên S3 của đối tác (`source_file_key`, `clean_file_key`), bối cảnh người dùng xác nhận (`context.request.context`: own_party, contract_type, has_personal_data…) để đề xuất bảo vệ đúng phía mình để đọc
   bằng tool `partner_document` (xem prompt service).
 - `context.workflow.contract_id`, `contract_version`; `context.request.output_language` (nếu có, mặc định tiếng Việt).

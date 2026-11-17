@@ -16,7 +16,8 @@ import httpx
 
 
 FIELDS = {"job_id", "runtime_id", "contract_id", "trace_id", "request_id", "duration_ms", "progress",
-          "error_type", "retry", "input_tokens", "output_tokens", "total_tokens", "model",
+          "error_type", "retry", "input_tokens", "output_tokens", "total_tokens", "cache_read_tokens",
+          "reasoning_tokens", "model",
           "document", "count"}  # data pipeline: law symbol, number of items (pages/documents/articles)
 
 _queue = queue.Queue(maxsize=int(os.getenv("MONITORING_QUEUE_SIZE", "1000")))

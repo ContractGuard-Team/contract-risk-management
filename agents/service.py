@@ -148,7 +148,14 @@ class AgentRuntime:
             guard()
             return {"text": text}
         memory = create_contract_memory(MemoryPolicy(**payload["policy"]), self.summarizer(observer), payload.get("memory"))
-        result = self.agent.run(AgentRequest(**payload["request"]), memory=memory, observer=observer)
+        from agents.shared.tools import JOB_CONTEXT
+        request = (payload["request"].get("context") or {}).get("request") or {}
+        token = JOB_CONTEXT.set({**payload["identity"], "partner_keys": [
+            key for key in (request.get("source_file_key"), request.get("clean_file_key")) if key]})
+        try:
+            result = self.agent.run(AgentRequest(**payload["request"]), memory=memory, observer=observer)
+        finally:
+            JOB_CONTEXT.reset(token)
         guard()
         return {"result": asdict(result), "memory": memory.snapshot(), "execution_revision": payload["execution_revision"]}
 

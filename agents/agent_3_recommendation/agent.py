@@ -22,10 +22,13 @@ class RecommendationAgent(BaseAgent):
 
     def check_output(self, data, request):
         source = (request.context.get("workflow") or {}).get("risk_scoring") or {}
-        risk = parse_json(source.get("text")) if isinstance(source, dict) else None
-        if risk is None:  # compacted Agent 2 input: findings cannot be cross-checked
-            return []
-        expected = {finding.get("finding_id") for finding in risk.get("findings", [])}
+        if source.get("compacted"):  # summary + the full id list
+            expected = set(source.get("ids") or [])
+        else:
+            risk = parse_json(source.get("text")) if isinstance(source, dict) else None
+            if risk is None:
+                return []
+            expected = {finding.get("finding_id") for finding in risk.get("findings", [])}
         got = [item["finding_id"] for item in data["recommendations"]]
         problems = [f"thiếu đề xuất cho finding: {sorted(expected - set(got))}"] if expected - set(got) else []
         if set(got) - expected:

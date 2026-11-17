@@ -35,7 +35,8 @@ def sanitize(event):
         if key not in event:
             continue
         value = event[key]
-        if key in {"duration_ms", "progress", "retry", "input_tokens", "output_tokens", "total_tokens", "count"}:
+        if key in {"duration_ms", "progress", "retry", "input_tokens", "output_tokens", "total_tokens", "cache_read_tokens",
+                   "reasoning_tokens", "count"}:
             if type(value) not in (int, float) or not math.isfinite(value) or value < 0:
                 raise ValueError("Invalid metric")
         elif not isinstance(value, str) or len(value) > 256:

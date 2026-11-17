@@ -348,3 +348,12 @@ web (file gốc) → collector ─┬─> S3: CHỈ file gốc (legal/<khóa>/<n
   `API_KEYS_SECRET_ID` (`config.secrets.read_secret_json`, instance role; quyền trong `data-pipeline-policy.json`).
   Xem docs/environment.md.
 
+## Sửa lỗi luồng ghi (2026-11-17)
+
+- Collector: version đã lưu nhưng thiếu ingest job (dừng giữa `add_version` và `add_job`) → lần quét sau thấy cùng hash vẫn
+  gọi `add_job` (idempotent) nên job được tạo lại.
+- Processor retry: bytes tải lại phải khớp `file_hashes` của version; khác → job `failed` (`SourceChanged`), lần crawl sau
+  lưu file mới thành version mới.
+- `apply_amendment`: lỗi ở bất kỳ bước nào sau khi đóng Điều cũ → hoàn tác (đóng dòng mới với valid_to=valid_from, xóa point
+  mới, mở lại dòng/point cũ theo point id tất định) rồi ném lỗi; Điều không bao giờ mất bản hiện hành, retry chạy lại từ
+  cùng trạng thái. Hoàn tác cũng lỗi → log ERROR để người kiểm tra.

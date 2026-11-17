@@ -50,6 +50,10 @@ async def _collect_one(row, known, *, source, store, archiver, root, today, proc
     if same:
         if known and same["document_id"] == known["id"]:
             store.save_document({**document, "status": known["status"]})  # metadata/fingerprint refresh only
+            # A run that stopped between add_version and add_job left this version without a job: queue it now
+            # (add_job keeps an existing job as it is, so a processed version is never reprocessed).
+            store.add_job({"docid": row["docid"], "sha256": content_hash, "version": same["version"],
+                           "payload": {"document_id": known["id"], "version_id": same["id"]}})
             return "unchanged"
         return "duplicate"  # identical file already stored under another docid
     keep = known and known["status"] in ("replaced", "expired")  # history decided by newer laws stays

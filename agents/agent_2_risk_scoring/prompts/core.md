@@ -5,7 +5,7 @@
 **Đầu vào** (tin nhắn user, JSON):
 - `context.workflow.classification`: kết quả tổng hợp của Agent 1 cho TOÀN hợp đồng, theo thứ tự chunk (mỗi phần có
   `chunk_id`, nguồn và output Agent 1: điều khoản, `clause_id`, `category`, `clause_text`, `facts`). Nếu có
-  `compacted: true` thì đây là bản tóm tắt; chỗ nào tóm tắt không đủ để kết luận thì ghi vào `evidence_gaps`.
+  `compacted: true` thì đây là bản tóm tắt kèm `ids` (đủ mọi `clause_id`); chỗ nào tóm tắt không đủ để kết luận thì ghi vào `evidence_gaps`.
 - `context.workflow.contract_id`, `contract_version`; `context.request` (nếu có): toàn bộ phiếu việc ContractGuard — `output_language` cho phần diễn giải và bối cảnh người dùng xác nhận trong `context.request.context` (bên mình là `own_party` buyer/seller, `contract_type`, `has_personal_data`, `service_criticality`…) để đánh giá rủi ro theo đúng phía mình.
 - File luật `# Rules: risk_policy.json` (chính sách 4.5b v1.2.2): danh mục rule R01–R20, rule thiếu section M01–M03,
   nhóm, mức độ, trọng số, ngưỡng mức, cách so khớp. Chỉ dùng rule, trọng số và ngưỡng có trong file này.
