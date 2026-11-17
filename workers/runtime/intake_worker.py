@@ -40,9 +40,15 @@ class IntakeWorker:
             progress("processing", 20)
             info = job.info.get("metadata", {}).get("contractguard")
             max_pages = ((info or {}).get("limits") or {}).get("max_pages")
-            pages = ((contract.get("context") or {}).get("preprocessing", {}).get("document") or {}).get("page_count")
+            document = ((contract.get("context") or {}).get("preprocessing", {}).get("document") or {})
+            pages = document.get("page_count")
             if max_pages and isinstance(pages, int) and pages > max_pages:
-                raise SourceError(f"Document has {pages} pages; the request allows {max_pages}")
+                from workers.partner import ERR_TOO_MANY_PAGES, input_error
+                raise input_error(f"Document has {pages} pages; the request allows {max_pages}", ERR_TOO_MANY_PAGES)
+            declared = (info or {}).get("declared_file_type")
+            detected = str(document.get("format") or "")
+            if declared and {"jpeg": "jpg"}.get(detected, detected) != declared:  # FR-UPL-003: real type, not extension
+                raise SourceError(f"File content is {detected or 'unknown'}, request declared {declared}")
             if self.partner is not None and info:  # input-processing accepted the file: store the checked copy
                 self.partner.store_clean(info, file)
             def observe(row):
@@ -114,7 +120,7 @@ class IntakeWorker:
                                    on_emit=partner and (lambda stage: partner.progress(job.job_id, stage)))
                 try:
                     events.emit("downloading", progress=5)
-                    limit = ((info or {}).get("limits") or {}).get("max_file_bytes")
+                    limit = ((info or {}).get("limits") or {}).get("max_bytes")
                     source = ContractSource(storage=self.storage)
                     if limit:  # the request may only tighten the worker's own limit
                         source = ContractSource(storage=self.storage, max_file_bytes=min(limit, source.max_file_bytes))

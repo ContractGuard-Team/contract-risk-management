@@ -139,7 +139,7 @@ class DynamoProgressTests(unittest.TestCase):
         writer = ProgressWorker(self.store, BrokenS3(), "output")
         with self.assertRaises(RuntimeError):
             writer.handle(self.event(row, status="completed", stage="completed", progress=100,
-                          result={"agent_id":"agent_3_recommendation","text":"test"}))
+                          result={"schema_version": "2.0.0", "job_id": row["job_id"], "document": {}}))
         self.assertIsNone(self.tables.event(row["job_id"], "completed"))
         self.assertEqual(self.store.client.get(row["job_id"])["status"], "running")
 

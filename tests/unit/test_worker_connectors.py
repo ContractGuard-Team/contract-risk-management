@@ -15,7 +15,7 @@ def observation(**changes):
     return {"id": "obs", "traceId": "t", "endTime": "2026-11-07T01:00:00Z",
             "metadata": {"job_id": "j", "runtime_id": "r", "contract_id": "c",
                          "worker_event": {"sequence": 1, "stage": "agent_3", "state": "completed", "progress": 95}},
-            "output": json.dumps({"agent_id": "agent_3_recommendation", "text": "result"}), **changes}
+            "output": json.dumps({"schema_version": "2.0.0", "job_id": "j", "overall_recommendation": "result"}), **changes}
 
 
 class ConnectorTests(unittest.TestCase):
@@ -46,7 +46,7 @@ class ConnectorTests(unittest.TestCase):
         self.assertEqual(progress_events([observation(traceId="other")], IDENTITY), [])
         self.assertEqual(progress_events([observation(metadata={})], IDENTITY), [])
         self.assertEqual(progress_events([observation(endTime=None)], IDENTITY), [])
-        self.assertEqual(progress_events([observation()], IDENTITY)[0]["result"]["text"], "result")
+        self.assertEqual(progress_events([observation()], IDENTITY)[0]["result"]["overall_recommendation"], "result")
         bad = observation()
         bad["metadata"]["runtime_id"] = "wrong"
         with self.assertRaises(ValueError):

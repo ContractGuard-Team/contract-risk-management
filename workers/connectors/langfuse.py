@@ -76,8 +76,8 @@ def progress_events(rows, identity):
         result = None
         if stage == "agent_3" and state == "completed":
             result = parse_object(row.get("output"))
-            if result.get("agent_id") != "agent_3_recommendation" or not isinstance(result.get("text"), str) or not result["text"].strip():
-                raise ValueError("Final observation must contain a complete Agent 3 result")
+            if result.get("schema_version") != "2.0.0" or result.get("job_id") != identity["job_id"]:
+                raise ValueError("Final observation must contain this job's extraction.v2")
         value = {"source_sequence": sequence, "stage": stage, "state": state,
                  "progress": progress, "result": result, "observation_id": row.get("id")}
         if sequence in events and events[sequence] != value:

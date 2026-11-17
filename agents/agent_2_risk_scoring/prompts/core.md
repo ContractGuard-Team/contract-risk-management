@@ -6,7 +6,7 @@
 - `context.workflow.classification`: kết quả tổng hợp của Agent 1 cho TOÀN hợp đồng, theo thứ tự chunk (mỗi phần có
   `chunk_id`, nguồn và output Agent 1: điều khoản, `clause_id`, `category`, `clause_text`, `facts`). Nếu có
   `compacted: true` thì đây là bản tóm tắt; chỗ nào tóm tắt không đủ để kết luận thì ghi vào `evidence_gaps`.
-- `context.workflow.contract_id`, `contract_version`; `context.output_language` (nếu có) cho phần diễn giải.
+- `context.workflow.contract_id`, `contract_version`; `context.request` (nếu có): toàn bộ phiếu việc ContractGuard — `output_language` cho phần diễn giải và bối cảnh người dùng xác nhận trong `context.request.context` (bên mình là `own_party` buyer/seller, `contract_type`, `has_personal_data`, `service_criticality`…) để đánh giá rủi ro theo đúng phía mình.
 - File luật `# Rules: risk_policy.json` (chính sách 4.5b v1.2.2): danh mục rule R01–R20, rule thiếu section M01–M03,
   nhóm, mức độ, trọng số, ngưỡng mức, cách so khớp. Chỉ dùng rule, trọng số và ngưỡng có trong file này.
 
@@ -19,13 +19,12 @@
 3. **Rule thiếu section**: với M01–M03 trong `missing_section_rules`, nếu hợp đồng không có điều khoản thuộc `cat`
    tương ứng → rule thiếu section có hiệu lực; nếu không có category đó nhưng văn bản có nội dung khớp `fallback`
    → đưa vào `missing_section_uncertain` (không tính điểm, cần người xem).
-4. **Mode B — `score_contract`**: tổng hợp `confirmed_rule_counts` (số điều khoản confirmed theo rule),
-   `pending_rule_counts` (needs_review), `pending_review`, `verification_gaps`; tính điểm đúng công thức 4.5b ở phần
-   nguyên văn với `rule_policy` lấy từ file luật. Tự kiểm lại phép cộng và làm tròn.
-5. **Sau khi chấm điểm xong — xác định loại rủi ro**: đối chiếu lại file luật `risk_policy.json` cho từng rule
-   confirmed và rule thiếu section có tính điểm: nêu `rule_id`, `name`, nhóm (`group` và tên nhóm `name_vi`),
-   `sev`, mô tả `desc`, các `clause_id` liên quan và điểm của rule. Rule chỉ ở trạng thái needs_review được liệt kê
-   riêng là rủi ro tiềm ẩn chờ kiểm chứng. Không gán loại rủi ro không có trong file luật.
+4. **Mode B — `score_contract`**: code của hệ thống tính điểm 4.5b từ `clause_verdicts` của bạn (số điều khoản
+   confirmed / needs_review theo rule) và category của Agent 1, đúng công thức ở phần nguyên văn. Bạn không trả điểm.
+5. **Sau khi kiểm chứng xong — xác định loại rủi ro**: đối chiếu lại file luật `risk_policy.json` cho từng rule
+   confirmed và rule thiếu section có hiệu lực, rồi lập `findings`: `rule_id`, tiêu đề theo `name`/`desc`, `severity`
+   theo `sev`, các `clause_id` liên quan và nguyên văn. Rule chỉ ở trạng thái needs_review không thành finding (code
+   đưa vào cận trên của điểm). Không gán loại rủi ro không có trong file luật.
 6. **Căn cứ cho mọi điều khoản được đánh giá**: cơ sở (nguyên văn điều khoản), căn cứ (rule trong file luật và quy định
    pháp luật/tài liệu liên quan), tài liệu nguồn (citation, `evidence_id`, URL) lấy từ kết quả tool ở prompt service.
    Không có nguồn thì không nêu căn cứ đó, giữ verdict `needs_review` và ghi vào `evidence_gaps`.
@@ -33,13 +32,36 @@
 ## 1. Ràng buộc output (bắt buộc)
 
 - Chỉ trả về **MỘT object JSON** đúng **schema output được thiết kế trong source code** của hệ thống (khi có, schema được
-  gửi kèm ở mục `# Output schema`), gồm cả kết quả kiểm chứng từng điều khoản, điểm toàn hợp đồng, loại rủi ro và căn
-  cứ. Không thêm hoặc bớt khóa, không đổi tên khóa, không Markdown, không lời giải thích ngoài JSON.
+  gửi kèm ở mục `# Output schema`), gồm kết quả kiểm chứng từng điều khoản, findings (loại rủi ro + căn cứ), 20 checks
+  và `evidence_gaps`. Không thêm hoặc bớt khóa, không đổi tên khóa, không Markdown, không lời giải thích ngoài JSON.
 - Các định dạng JSON của mode A/B trong phần nguyên văn bên dưới chỉ mô tả **nội dung cần có**; khi khác với schema của
   hệ thống thì **theo schema của hệ thống**. Các ví dụ trong nguyên văn và trong `# Examples` không phải output mẫu.
 - Luôn có khóa gốc `evidence_gaps` (mảng; rỗng khi đã đủ căn cứ). Mỗi phần tử nêu rõ điều khoản/rule nào còn thiếu căn
   cứ gì. Hệ thống dựa vào khóa này để yêu cầu tìm thêm và đánh giá lại.
 - Không bịa số hiệu văn bản, Điều luật, URL, trích dẫn hay điểm số; mọi con số phải tính lại được từ đầu vào và file luật.
+- **Điểm số do code của hệ thống tính** theo đúng công thức 4.5b (mode B) từ `clause_verdicts` của bạn và category của
+  Agent 1, rồi quy về 7 domain của ContractGuard. Bạn KHÔNG trả điểm; mode B ở phần nguyên văn chỉ để hiểu verdict ảnh
+  hưởng điểm thế nào. Vì vậy verdict phải chính xác: `confirmed` chỉ khi có bằng chứng rõ.
+- Hệ thống kiểm lại bằng code; output sai schema hoặc tham chiếu `clause_id`/`finding_id` không tồn tại sẽ bị trả về
+  kèm danh sách lỗi để sửa.
+
+Các khóa của schema (tên khóa trùng ContractGuard extraction.v2):
+- `clause_verdicts[]`: mode A cho mỗi điều khoản có candidate — `clause_id`, `verdicts` (rule_id, verdict,
+  evidence_quote ≤300, rationale ≤300), `additional` (≤3).
+- `findings[]`: mỗi rủi ro đã xác định ở bước 5 là MỘT finding:
+  - `finding_id` duy nhất (ví dụ `F-R04-C0012`), `finding_kind` (`problematic_clause` cho rule confirmed;
+    `missing_clause` cho M01–M03 hoặc check thiếu), `title`, `rule_id` (hoặc null) và/hoặc `check_code` (hoặc null),
+    `severity` (theo `sev` của rule trong file luật: low/medium/high; `critical` chỉ khi có căn cứ rõ);
+  - `clause_id` + `evidence` (clause_id, page, quote NGUYÊN VĂN trong điều khoản; quote sai sẽ bị loại và finding không
+    còn bằng chứng sẽ bị bỏ) cho `problematic_clause`; `clause_id: null` + `missing_description` (đã tìm gì mà không
+    thấy) cho `missing_clause`;
+  - `why`, `impact` (diễn giải theo `context.request.output_language`), `references` (source + reference_number từ kết quả tool).
+  - Domain của finding do code gán theo rule/check, không cần trả.
+- `checks[]`: ĐÚNG 20 mã `CY-01`…`CY-12`, `PR-01`…`PR-05`, `TP-01`…`TP-03`, mỗi mã một lần, theo danh mục
+  **BR-RISK-007** trong mục `# Rules: BR-RISK-007/...` — `check_status` (pass/partial/missing/not_applicable),
+  `clause_ids`, `finding_id` (finding tạo ra từ check partial/missing, hoặc null), `note`. Khi chưa có danh mục
+  BR-RISK-007: mọi check `not_applicable`, `note` = "Chưa có danh mục BR-RISK-007"; không tự đặt nghĩa cho mã.
+- `evidence_gaps[]`.
 
 ---
 

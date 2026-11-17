@@ -102,7 +102,8 @@ class ServiceArchitectureTests(unittest.TestCase):
             headers = {"Authorization":"Bearer "+TOKEN}
             desc = http.get("/v1/describe", headers=headers).json()
             payload = {"identity":IDENTITY,"execution_revision":desc["execution_revision"],"operation":"run",
-                "request":{"content":"example clause","context":{}},"memory":{},
+                "request":{"content":"example clause","context":{"workflow":{"contract_id":"contract","contract_version":"1",
+                    "chunk_id":"k0","chunk_index":0,"chunk_count":1,"source_metadata":{"pages":[2]}}}},"memory":{},
                 "policy":{"max_input_tokens":10000,"summary_max_tokens":500}}
             headers["Idempotency-Key"] = call_key(payload)
             self.assertEqual(http.post("/v1/jobs", json=payload, headers=headers).status_code, 202)
@@ -112,7 +113,9 @@ class ServiceArchitectureTests(unittest.TestCase):
                 time.sleep(.02)
             self.assertEqual(row["status"], "completed", row)
             self.assertTrue(row["result"]["memory"]["turns"])
-            self.assertTrue(json.loads(row["result"]["result"]["text"])["fixture"])
+            answer = json.loads(row["result"]["result"]["text"])  # fixture answers with a valid ClassificationResult
+            self.assertEqual((answer["chunk_id"], answer["clauses"][0]["text"], answer["clauses"][0]["page_start"]),
+                             ("k0", "example clause", 2))
             payload["execution_revision"] = "changed"
             self.assertEqual(http.post("/v1/jobs", json=payload, headers=headers).status_code, 400)
 

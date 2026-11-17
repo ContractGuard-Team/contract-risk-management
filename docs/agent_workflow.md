@@ -22,6 +22,19 @@ flowchart LR
 ```
 
 LangGraph định nghĩa các node trong `orchestration/workflow.py`.
+
+Bàn giao giữa các agent (kiểm 2026-11-17):
+- Agent 1: mỗi chunk xử lý xong lưu cache `{scope, result, memory}`; LangGraph lặp chunk kế tiếp (khôi phục memory chunk
+  trước, nên Agent 1 thấy kết quả đã trả) tới chunk cuối, rồi tổng hợp `{job_id, contract_id, contract_version,
+  chunk_count, chunks}` và giải phóng memory Agent 1.
+- Agent 2 nhận `context.workflow = {job_id, contract_id, contract_version, cache_key, classification: <tổng hợp>}`;
+  Agent 3 nhận `context.workflow = {job_id, …, risk_scoring: <kết quả Agent 2>}` và đọc tài liệu gốc qua MCP
+  `partner_document` (bucket đối tác) — MCP đồng thời nối S3 pháp luật (`s3_list_objects`/`s3_get_object`).
+- `run_contract(contract, job_id, runtime_id=None)`: `job_id` là job thật (đưa cho agent), `runtime_id` chỉ tách cache
+  giữa các lần chạy (service LangGraph truyền identity.runtime_id; khóa cache giữ nguyên công thức cũ).
+- Quy định: prompt = giá trị cố định dev nhập (file trong `agents/<agent>/prompts/`, `memory/`); context = giá trị
+  thay đổi lúc chạy (request ContractGuard, kết quả agent trước, kết quả tool MCP). Câu yêu cầu sửa output / đánh giá lại
+  nằm ở `prompts/fix_format.md`, `prompts/reevaluate.md`; code chỉ điền `{problems}` / `{gaps}`.
 `ContractInput` yêu cầu contract_id, contract_version, danh sách chunk và expected_chunk_count.
 Index phải liên tục từ 0, ID chunk không trùng, text không rỗng. Cần cung cấp đúng
 expected_chunk_count từ bước chia file để phát hiện cả trường hợp thiếu chunk cuối.

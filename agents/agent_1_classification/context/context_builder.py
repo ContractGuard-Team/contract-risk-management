@@ -1,4 +1,6 @@
+from agents.shared.business_context import check_context
 from agents.shared.context import build_context as build_shared_context
+from agents.agent_1_classification.schemas.input import ChunkContext
 from common.schemas.agent_messages import AgentRequest
 from common.schemas.contract import ContractInput
 from agents.agent_1_classification.schemas.input import ClassificationInput
@@ -24,5 +26,5 @@ def build_chunk_request(contract: ContractInput, index: int) -> ClassificationIn
 
 
 def build_context(request: AgentRequest) -> dict:
-    # Text remains user data; preprocessing metadata must not become system instructions.
+    check_context(ChunkContext, request.context)  # business shape of the handoff (request + workflow)
     return build_shared_context(request)

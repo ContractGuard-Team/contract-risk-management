@@ -4,7 +4,7 @@ def chunk_scope(contract, index):
             "chunk_id": contract["chunks"][index]["chunk_id"], "chunk_index": index}
 
 
-def aggregate_contract(contract, cache, key):
+def aggregate_contract(contract, cache, key, job_id=None):
     chunks = []
     for index, chunk in enumerate(contract["chunks"]):
         cached = cache.get(key, "classification", chunk["chunk_id"])
@@ -17,5 +17,5 @@ def aggregate_contract(contract, cache, key):
     if len(chunks) != contract["expected_chunk_count"]:
         raise ValueError("Cannot aggregate an incomplete contract")
     # Lossless ordered aggregation; do not guess domain-specific merge/deduplication rules.
-    return {"contract_id": contract["contract_id"], "contract_version": contract["contract_version"],
+    return {"job_id": job_id, "contract_id": contract["contract_id"], "contract_version": contract["contract_version"],
             "chunk_count": len(chunks), "chunks": chunks}

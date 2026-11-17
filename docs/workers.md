@@ -15,7 +15,7 @@ job chưa hoàn tất giữ message, lease hết hạn cho retry. Chỉ DeleteMe
 
 Message SQS (định dạng nội bộ) giữ job_id/contract_id/contract_version, source_file_key (+ bucket, mặc định
 WORKER_INPUT_BUCKET); runtime_id/runtime-id tùy chọn. Tên mục trùng với ContractGuard (2026-11-16); tên cũ version,
-s3_bucket/s3_key/s3_version_id, source đã bỏ. Schema: `docs/schemas/worker_sqs_input.schema.json`. Không tạo AWS resource trong code vận hành.
+s3_bucket/s3_key/s3_version_id, source đã bỏ. Schema: `common/schemas/worker/sqs_input.schema.json` (mục cuối). Không tạo AWS resource trong code vận hành.
 Config AWS quyền/region, token và internal URL xem [environment](environment.md).
 
 Nhánh đọc Langfuse cũ còn để tương thích caller/test library; không được dùng trong
@@ -77,16 +77,40 @@ Vòng xử lý:
 6. Message trùng sau khi đã xong → gửi lại `completed`, xóa quarantine (idempotent), không chạy lại 3 agent.
 
 Mọi message gửi lên queue kết quả qua `check_outbound` (đúng bộ trường §3 theo `event_type`, chuỗi không rỗng,
-`result_key` đúng mẫu, `failure_reason` ≤ 300, `step` ≤ 64); sai thì không gửi. Viết tay theo tài liệu, thay bằng
-`queue-messages.v1.schema.json` khi có.
+`result_key` đúng mẫu, `failure_reason` ≤ 2000, `step` thuộc 4 bước, `error_code` dạng ERR-XXX-000); sai thì không gửi.
+Cấu trúc vào/ra chi tiết: mục cuối "Cấu trúc vào/ra của worker".
 
-Còn phụ thuộc đối tác: file `extraction.json` hiện là bố cục tạm (`workers/partner.py:extraction`) cho tới khi có
-`contracts/extraction.v2.schema.json` — backend sẽ từ chối kết quả không qua schema; danh mục `error_code` và giá trị `step`
-chưa có (dùng tạm ERR-AI-001/002 và tên stage). "Làm sạch" hiện = chép bytes đã được input-processing chấp nhận, giữ ContentType của file upload.
+Còn phụ thuộc đối tác: danh mục ERR-* đầy đủ (đang dùng ERR-AI-001/002 tạm, ERR-UPL-004 của đối tác), danh mục
+BR-RISK-006/007 và fact_key (xem `docs/agent_core.md`). "Làm sạch" hiện = chép bytes đã được input-processing chấp nhận, giữ ContentType của file upload.
 Kiểm chứng: `tests/unit/test_worker_partner.py` (Moto: ping/pong, trọn vòng, giao trùng, lỗi đầu vào, retry tới lần 3,
 keepalive) + 19 test worker cũ; chưa chạy với AWS thật / LocalStack của đối tác.
 
-### Context `source_document` cho Agent 3 (2026-11-17)
-Chế độ ContractGuard: `PartnerProtocol.read` thêm `context.source_document = {bucket, source_file_key, clean_file_key}`
-(lấy từ `request.json`, không tự ghép). Context đi nguyên qua input-processing → ContractInput → LangGraph → agent; Agent 3
-đọc tài liệu gốc bằng tool MCP `partner_document` (xem `docs/mcp.md`). Message nội bộ không có khóa này.
+## Schema nghiệp vụ vào/ra với ContractGuard (2026-11-17)
+
+Schema RIÊNG của project, viết bằng Pydantic trong `common/schemas/business/` (image nào cũng có, không thêm thư viện),
+dựng từ các mục dữ liệu trong message/file đối tác gửi — không chép file schema của họ.
+
+| File | Model | Vai trò |
+| --- | --- | --- |
+| `inbound.py` (NHẬN) | `InboundMessage` = `Ping` / `AnalysisRequested`; `AnalysisRequest` (+ `ContractContext`, `Limits`) | Mọi mục ContractGuard gửi đều có trường; trường lạ được GIỮ (`extra="allow"`) để không mất dữ liệu |
+| `outbound.py` (TRẢ) | `OutboundMessage` = `Progress` / `Completed` / `Failed` / `Pong`; `AnalysisResult` (+ Document, Clause, Location, Region, Finding, Scoring, DomainScore, Trace, Embeddings) | Mọi mục ContractGuard nhận đều có trường; khóa lạ bị cấm; trường tùy chọn không có giá trị thì bỏ (`to_json`) |
+| `shared.py` | Evidence, Reference, Fact, Check, ContractMetadata, InjectionWarning, kiểu Id/ClauseType/CheckCode/Domain/RiskLevel, `CHECK_CODES` | Khối dùng chung cho cả hai chiều và output 3 agent |
+
+Luồng: `PartnerProtocol.read` kiểm message bằng `InboundMessage`, đọc request.json bằng `AnalysisRequest` → QueueJob với
+`context = {"request": <request.json đúng như đối tác gửi>}` → input-processing → LangGraph → 3 agent đọc
+`context.request` (output_language, bối cảnh người dùng xác nhận, key tài liệu gốc…) → `orchestration/extraction.py`
+dựng `AnalysisResult` (tenant_id, output_language, clean_file_key lấy từ `context.request`) → worker ghi `result_key`.
+Message ra luôn qua `check_outbound` (= `OutboundMessage`, đúng bộ khóa sẽ gửi).
+
+- Bước tiến độ: downloading/dispatching/processing → `reading_file`, agent_1 → `splitting_clauses`, agent_2/agent_3 →
+  `evaluating`, saving_result → `scoring`; chỉ gửi khi đổi bước.
+- `limits.max_bytes` siết giới hạn tải; `limits.max_pages` vượt → `failed` ERR-UPL-004; loại file thật khác
+  `declared_file_type` → ERR-AI-001; `result_key` phải là `results/<job_id>/extraction.json` (IAM đối tác);
+  `source_file_key` ở `quarantine/` hoặc `clean/` (chỉ xóa khi ở quarantine/).
+- Trích dẫn/trang được code kiểm trước khi ghi (quote không nằm trong điều khoản bị bỏ, finding hết bằng chứng bị bỏ,
+  trang sai được đặt về trang đầu điều khoản).
+- Đã đối chiếu ngoài repo với các file gốc của đối tác (Downloads): kết quả + 8 loại message 0 lỗi; request đủ mọi trường
+  tùy chọn và 2 loại message được model nhận lại nguyên vẹn. `extraction.schema.json` (v1) và `job-result.schema.json`
+  là định dạng nội bộ backend, không đi qua worker. `embeddings` có trong model nhưng chưa sinh (Phase 4).
+- File TXT chỉ có ở chế độ nội bộ (ContractGuard không có `txt`): kết quả cùng bố cục nhưng không ép qua `AnalysisResult`.
+

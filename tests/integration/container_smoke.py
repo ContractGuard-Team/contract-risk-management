@@ -115,8 +115,8 @@ def main():
             row = wait_for(complete)
             assert row["progress"] == 100 and len(row["runtime_id"]) == 32
             output = json.loads(s3.get_object(Bucket=row["output"]["bucket"], Key=row["output"]["key"])["Body"].read())
-            assert output["result"]["agent_id"] == "agent_3_recommendation"
-            assert json.loads(output["result"]["text"])["fixture"] is True
+            assert output["result"]["schema_version"] == "2.0.0" and output["result"]["job_id"] == job_id
+            assert len(output["result"]["checks"]) == 20 and output["result"]["clauses"]
             if audit_root := os.getenv("SMOKE_AUDIT_DIR"):
                 from handoff_audit import verify_handoffs
                 identity = {"job_id":job_id,"runtime_id":row["runtime_id"],"contract_id":"contract-"+run_id,

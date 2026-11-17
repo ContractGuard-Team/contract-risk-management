@@ -8,10 +8,10 @@ mỗi lần đánh giá, nên gom truy vấn. Chỉ dùng thông tin có trong k
 `evidence_gaps` của Agent 2. Đây là phạm vi công việc; dùng `clause_id` và nguyên văn để tìm đúng chỗ trong tài liệu gốc.
 
 ## Bước 2 — Gọi tài liệu gốc từ S3 của đối tác
-- Gọi `partner_document` với `key` = `context.source_document.source_file_key`. Đọc tiếp bằng `offset` = `next_offset`
+- Gọi `partner_document` với `key` = `context.request.source_file_key`. Đọc tiếp bằng `offset` = `next_offset`
   cho tới khi `next_offset` là `null` hoặc đã có đủ các điều khoản cần xử lý (và các điều khoản chúng dẫn chiếu tới).
-- Nếu lỗi với `source_file_key`, thử `context.source_document.clean_file_key`. **Không tự ghép hay đoán key.**
-- Không có `context.source_document` hoặc không đọc được: dựa vào nguyên văn trong kết quả Agent 2 và ghi vào
+- Nếu lỗi với `source_file_key`, thử `context.request.clean_file_key`. **Không tự ghép hay đoán key.**
+- Không có `context.request` (job nội bộ) hoặc không đọc được: dựa vào nguyên văn trong kết quả Agent 2 và ghi vào
   `evidence_gaps` rằng chưa đối chiếu được tài liệu gốc.
 - Trích dẫn hợp đồng phải lấy đúng nguyên văn từ kết quả `partner_document`; không diễn đạt lại rồi gọi là trích dẫn.
 
@@ -20,7 +20,11 @@ mỗi lần đánh giá, nên gom truy vấn. Chỉ dùng thông tin có trong k
    lai trên Qdrant, có `citation`, `evidence_id`, hiệu lực) — ưu tiên; `qdrant_search` khi cần lọc payload riêng.
 2. **Chính xác** (đã biết số hiệu/Điều, cần nguyên văn, hiệu lực, sửa đổi): `supabase_select` (gọi
    `supabase_list_tables` trước), hoặc `legal_reference` với `symbol` + `article_no`.
-3. **Chưa đủ** sau khi tra database: `web_search` — câu hỏi ngắn, không gửi nguyên văn hợp đồng, tên các bên hay thông
+3. **Văn bản pháp luật gốc** (S3 pháp luật của hệ thống, khác bucket đối tác ở Bước 2): `s3_list_objects` với
+   `prefix` = `s3_prefix` trong payload kết quả `qdrant_search`/`legal_reference` + `"/source/"` để lấy key file gốc làm
+   nguồn trích dẫn (`s3_get_object` với PDF/DOC trả `binary=true`: nội dung Điều đọc từ `legal_reference`/`supabase_select`).
+   Chỉ dùng key có trong kết quả tool; tài liệu hợp đồng KHÔNG nằm ở bucket này.
+4. **Chưa đủ** sau khi tra database: `web_search` — câu hỏi ngắn, không gửi nguyên văn hợp đồng, tên các bên hay thông
    tin bí mật; ưu tiên nguồn chính thống; ghi URL và ghi rõ là nguồn web.
 
 ## Căn cứ và đánh giá lại

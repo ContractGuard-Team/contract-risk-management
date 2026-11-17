@@ -1,6 +1,6 @@
 """Read-only access to the ORIGINAL contract in ContractGuard's S3 bucket, for Agent 3 (tool partner_document).
 
-The key comes from the job context (context.source_document.source_file_key, written by workers/partner.py).
+The key comes from the job context (context.request.source_file_key: the whole request.json, passed by workers/partner.py).
 Bucket = PARTNER_S3_BUCKET (compose maps it from WORKER_INPUT_BUCKET). Only quarantine/ and clean/ keys; every
 S3 call other than reads is refused here, and the partner's bucket policy grants this role GetObject only.
 Text files are decoded directly; PDF/DOCX/images go through the existing input-processing service (same

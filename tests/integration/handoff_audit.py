@@ -30,14 +30,16 @@ def rows_for(root, service, identity):
 
 
 def assert_model_received(payload, response):
-    """Check the actual user message recorded by BaseAgent and hashed by fixture."""
+    """Check the actual user message recorded by BaseAgent and the schema-shaped fixture answer."""
     turn = response["memory"]["turns"][-1]
     assert turn[0]["role"] == "user" and turn[-1]["role"] == "assistant"
     assert json.loads(turn[0]["content"]) == payload["request"], "Model input differs from RPC request"
     assert turn[-1]["content"] == response["result"]["text"]
-    fixture = json.loads(response["result"]["text"])
-    assert fixture["fixture"] is True
-    assert fixture["input_sha256"] == hashlib.sha256(turn[0]["content"].encode()).hexdigest(), "Model consumed different context"
+    answer = json.loads(response["result"]["text"])
+    workflow = payload["request"]["context"]["workflow"]
+    if "chunk_id" in workflow:  # Agent 1 fixture echoes the chunk it was given: proves the model consumed it
+        assert answer["chunk_id"] == workflow["chunk_id"], "Model consumed a different chunk"
+        assert answer["clauses"][0]["text"] == payload["request"]["content"], "Model consumed different context"
 
 
 def verify_handoffs(root, identity, file_bytes, filename, persisted_output, probe):
@@ -121,10 +123,11 @@ def verify_handoffs(root, identity, file_bytes, filename, persisted_output, prob
     assert_model_received(p3, r3)
     print("PASS handoff 4: Agent 2 output -> Agent 3 context.workflow.risk_scoring", flush=True)
 
-    # 5. Compare Agent 3 -> graph -> worker's persisted S3 artifact, not just status.
+    # 5. Agent 3 -> graph extraction.v2 -> worker's persisted S3 artifact, not just status.
     assert graph["results"]["agent_3_recommendation"] == r3["result"]
-    assert persisted_output["result"] == r3["result"], "Worker saved a different Agent 3 output"
+    assert persisted_output["result"] == graph["extraction"], "Worker saved a different extraction"
+    assert [c["text"] for c in graph["extraction"]["clauses"]] == [c["text"] for c in chunks], "Clauses lost text"
     assert persisted_output["job_id"] == identity["job_id"]
     assert persisted_output["runtime_id"] == identity["runtime_id"]
     assert persisted_output["contract_id"] == identity["contract_id"]
-    print("PASS handoff 5: Agent 3 output -> LangGraph -> worker -> identical S3 result", flush=True)
+    print("PASS handoff 5: agents -> LangGraph extraction.v2 -> worker -> identical S3 result", flush=True)

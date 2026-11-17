@@ -95,6 +95,9 @@ class WorkflowTests(unittest.TestCase):
             agent3 = json.loads(provider.calls[4][-1]["content"])
             self.assertEqual(agent3["context"]["workflow"]["risk_scoring"],
                              result["results"]["agent_2_risk_scoring"])
+            # LangGraph aggregates with the job id and hands it to Agent 2 and Agent 3.
+            self.assertEqual((aggregate["job_id"], agent2["context"]["workflow"]["job_id"],
+                              agent3["context"]["workflow"]["job_id"]), ("job-1",) * 3)
             for c in contract().chunks:
                 saved = flow.cache.get(result["cache_key"], "classification", c.chunk_id)
                 self.assertEqual(saved["result"]["text"], "result:" + c.text)
@@ -108,6 +111,15 @@ class WorkflowTests(unittest.TestCase):
                 saved = flow.cache.get(result["cache_key"], stage)
                 self.assertTrue(saved["result"]["text"])
                 self.assertNotIn("memory", saved)  # released after the final result was stored
+
+    def test_runtime_isolates_the_cache_but_agents_get_the_job_id(self):
+        provider = RecordingProvider()
+        with configured_agents(provider) as agents:
+            flow = pipeline(agents)
+            first = flow.run_contract(contract(), job_id="job-1", runtime_id="r1")
+            second = flow.run_contract(contract(), job_id="job-1", runtime_id="r2")
+        self.assertNotEqual(first["cache_key"], second["cache_key"])  # a new attempt never reuses another's cache
+        self.assertEqual(json.loads(provider.calls[-1][-1]["content"])["context"]["workflow"]["job_id"], "job-1")
 
     def test_more_than_default_graph_limit_and_bounded_context(self):
         provider, summary = RecordingProvider(), SummaryStub()
@@ -247,9 +259,18 @@ class SummarizerTests(unittest.TestCase):
 
     def test_missing_summary_prompt_never_calls_provider(self):
         provider = RecordingProvider()
-        with self.assertRaises(ConfigurationError):
-            ModelMemorySummarizer(provider, Path("agents/agent_1_classification/memory/short_term_summary.md")).summarize("history", 20, 1000)
+        with TemporaryDirectory() as directory, self.assertRaises(ConfigurationError):
+            empty = Path(directory) / "short_term_summary.md"
+            empty.write_text("<!-- TODO -->", encoding="utf-8")
+            ModelMemorySummarizer(provider, empty).summarize("history", 20, 1000)
         self.assertEqual(provider.calls, [])
+
+    def test_each_agent_has_its_own_filled_summary_prompt(self):
+        texts = {agent: Path(f"agents/{agent}/memory/short_term_summary.md").read_text(encoding="utf-8")
+                 for agent in ("agent_1_classification", "agent_2_risk_scoring", "agent_3_recommendation")}
+        self.assertEqual(len(set(texts.values())), 3)
+        self.assertIn("clause_id", texts["agent_1_classification"])
+        self.assertIn("finding_id", texts["agent_3_recommendation"])
 
 
 if __name__ == "__main__":

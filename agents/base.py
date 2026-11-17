@@ -6,30 +6,24 @@ from agents.shared.context import build_context
 from common.exceptions import ModelResponseError
 from common.ports.model_provider import ModelProvider
 from common.schemas.agent_messages import AgentRequest, AgentResult
-from agents.hermes.config_loader import load_prompts
+from agents.hermes.config_loader import follow_up_prompt, load_prompts
 from agents.hermes.tool_registry import ToolRegistry
+from agents.shared.output import model_errors, parse_json
 from monitoring.observer import NullObserver
 from monitoring.usage import model_usage
 
 MAX_TOOL_ROUNDS = 6        # model -> tools -> model rounds per evaluation pass
 MAX_REEVALUATIONS = 2      # extra passes when the answer still lists evidence gaps
+MAX_FORMAT_RETRIES = 2     # re-asks when the answer does not match the agent's business model (schemas/output.py)
 MAX_TOOL_RESULT_CHARS = 20_000
 EVIDENCE_GAPS = "evidence_gaps"  # top-level output field: what still lacks a source (empty = enough evidence)
-REEVALUATE = ("Kết quả trên còn thiếu bằng chứng cho: {gaps}. Gọi thêm tool phù hợp để tìm căn cứ cho đúng các điểm "
-              "này rồi đánh giá lại và trả lại TOÀN BỘ kết quả theo schema. Nếu vẫn không tìm được nguồn, giữ điểm đó "
-              "trong evidence_gaps; tuyệt đối không bịa căn cứ.")
+# The follow-up instructions themselves are prompt files (prompts/fix_format.md, prompts/reevaluate.md).
 
 
 def evidence_gaps(text) -> list:
     """Gaps the model itself reported in its JSON answer; [] when not JSON or none listed."""
-    raw = text.strip() if isinstance(text, str) else ""
-    if raw.startswith("```"):
-        raw = raw.strip("`").removeprefix("json").strip()
-    try:
-        data = json.loads(raw)
-    except ValueError:
-        return []
-    gaps = data.get(EVIDENCE_GAPS) if isinstance(data, dict) else None
+    data = parse_json(text)
+    gaps = data.get(EVIDENCE_GAPS) if data is not None else None
     return [gap for gap in gaps if gap] if isinstance(gaps, list) else []
 
 
@@ -44,9 +38,15 @@ def add_usage(total: dict, usage: dict) -> dict:
     return total
 
 
+def output_schema_text(model) -> str:
+    """JSON Schema of the business output model, sent to the model as the binding output format."""
+    return json.dumps(model.model_json_schema(), ensure_ascii=False, separators=(",", ":"))
+
+
 class BaseAgent:
     agent_id = ""
     output_type = AgentResult
+    output_model = None  # Pydantic business model of `text` (agents/<agent>/schemas/output.py); None = free text
     tool_functions = {}
 
     def __init__(self, provider: ModelProvider, *, directory=None, inference_config=None, tools=None, lessons=None):
@@ -67,8 +67,8 @@ class BaseAgent:
         prompts = load_prompts(self.directory)
         system = [prompts["soul"], prompts["core"], prompts["external"]]
         system += [f"# Rules: {name}\n{text}" for name, text in prompts["rules"]]
-        if prompts["output_schema"]:
-            system.append("# Output schema (JSON Schema, bắt buộc tuân thủ)\n" + prompts["output_schema"])
+        if self.output_model is not None:
+            system.append("# Output schema (JSON Schema, bắt buộc tuân thủ)\n" + output_schema_text(self.output_model))
         if prompts["examples"]:
             system.append("\n\n".join(["# Examples", *(f"## Example {i}\n{text}"
                                                        for i, text in enumerate(prompts["examples"], 1))]))
@@ -81,6 +81,20 @@ class BaseAgent:
             {"role": "user", "content": json.dumps(self.build_context(request),
                                                   ensure_ascii=False, allow_nan=False)},
         ]
+
+    def output_problems(self, text, request: AgentRequest) -> list[str]:
+        """Business-model errors of the answer, then this agent's own cross-checks; [] when valid or no model is set."""
+        if self.output_model is None:
+            return []
+        data = parse_json(text)
+        if data is None:
+            return ["output is not one JSON object"]
+        errors = model_errors(self.output_model, data)
+        return errors or self.check_output(self.output_model.model_validate(data).model_dump(mode="json"), request)
+
+    def check_output(self, data: dict, request: AgentRequest) -> list[str]:
+        """Agent-specific rules JSON Schema cannot express (ids that must match the request, completeness)."""
+        return []
 
     def reflect(self, contract: dict, output) -> dict:
         """Long-term memory: propose lessons (pending review) from this agent's finished run."""
@@ -133,7 +147,7 @@ class BaseAgent:
                                        "content_characters": sum(len(m.get("content") or "") for m in messages)})
             observation.update(input=messages, model_parameters=deepcopy(self.inference_config))
             transcript, usage = list(messages), {}
-            rounds = reevaluations = tool_calls = 0
+            rounds = reevaluations = tool_calls = fixes = 0
             while True:
                 response = self._generate(transcript, tools, final=rounds >= MAX_TOOL_ROUNDS)
                 add_usage(usage, response.usage)  # billed even when the response is rejected below
@@ -152,20 +166,28 @@ class BaseAgent:
                     raise ModelResponseError("Model returned no text")
                 if response.stop_reason != "stop":
                     raise ModelResponseError(f"Model did not complete: {response.stop_reason}")
+                problems = self.output_problems(response.text, request)
+                if problems:
+                    if fixes >= MAX_FORMAT_RETRIES:
+                        raise ModelResponseError(f"{self.agent_id} output does not match its schema: {problems[:3]}")
+                    fixes += 1
+                    transcript += [{"role": "assistant", "content": response.text},
+                                   {"role": "user", "content": follow_up_prompt(
+                                       self.directory, "fix_format", problems="; ".join(problems)[:3000])}]
+                    continue
                 gaps = evidence_gaps(response.text)
                 if gaps and tools and reevaluations < MAX_REEVALUATIONS:
                     # Evidence missing: search again (fresh tool budget) and re-evaluate the whole answer.
                     reevaluations, rounds = reevaluations + 1, 0
                     transcript += [{"role": "assistant", "content": response.text},
-                                   {"role": "user", "content": REEVALUATE.format(
-                                       gaps=json.dumps(gaps, ensure_ascii=False)[:2000])}]
+                                   {"role": "user", "content": follow_up_prompt(
+                                       self.directory, "reevaluate", gaps=json.dumps(gaps, ensure_ascii=False)[:2000])}]
                     continue
                 break
             observation.summary(output={"text_characters": len(response.text), "stop_reason": response.stop_reason,
-                                        "tool_calls": tool_calls, "reevaluations": reevaluations,
+                                        "tool_calls": tool_calls, "reevaluations": reevaluations, "format_fixes": fixes,
                                         "evidence_gaps": len(evidence_gaps(response.text))})
             observation.update(output=response.text, usage_details=model_usage(usage))
         if memory is not None:
             memory.record(current, response)  # final answer only; tool transcripts are not kept in memory
-        # TODO: Parse/validate domain JSON here once the output schema is specified.
         return self.output_type(self.agent_id, response.text, usage, response.stop_reason)

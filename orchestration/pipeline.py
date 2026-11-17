@@ -64,6 +64,8 @@ class ContractRiskPipeline:
                 instructions[name] = path.read_text(encoding="utf-8") if path.is_file() else ""
             settings = getattr(agent.provider, "settings", None)
             # instructions already include this agent's own memory prompts (short_term_summary, long_term_reflection)
+            model = getattr(agent, "output_model", None)
+            instructions["output_schema"] = json.dumps(model.model_json_schema(), sort_keys=True) if model is not None else ""
             specs[agent_id] = {"instructions": instructions, "inference": agent.inference_config,
                               "model": getattr(settings, "model", ""),
                               "policy": asdict(self.policies[agent_id])}
@@ -83,13 +85,15 @@ class ContractRiskPipeline:
                     outcome = {"skipped": type(exc).__name__}
                 observation.summary(output={key: outcome[key] for key in ("proposed", "skipped") if key in outcome})
 
-    def run_contract(self, contract: ContractInput, *, job_id: str):
+    def run_contract(self, contract: ContractInput, *, job_id: str, runtime_id: str | None = None):
+        """job_id: the job (handed to Agent 2/3). runtime_id: optional attempt id; it only isolates the cache."""
         contract.validate()
         if not isinstance(job_id, str) or not job_id.strip():
             raise ValueError("job_id is required for cache isolation/resume")
         if "workflow" in contract.context:
             raise ValueError("'workflow' is reserved for orchestration")
-        key = hashlib.sha256(canonical([job_id, contract.contract_id, contract.contract_version]).encode()).hexdigest()
+        run_key = f"{job_id}:{runtime_id}" if runtime_id else job_id
+        key = hashlib.sha256(canonical([run_key, contract.contract_id, contract.contract_version]).encode()).hexdigest()
         try:
             with self.cache.job_lock(key):
                 with self.observer.attributes(session_id=key, tags=["contract-risk-management"],
@@ -108,7 +112,8 @@ class ContractRiskPipeline:
                     raw = asdict(contract)
                     try:
                         state = self.graph.invoke(
-                            {"cache_key": key, "contract": raw, "next_chunk": resume_chunk(self.cache, key, raw),
+                            {"cache_key": key, "job_id": job_id, "contract": raw,
+                             "next_chunk": resume_chunk(self.cache, key, raw),
                              "aggregate": {}, "results": {}},
                             {"configurable": {"thread_id": key}, "recursion_limit": len(contract.chunks) + 10})
                     finally:

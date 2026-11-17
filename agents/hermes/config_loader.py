@@ -53,7 +53,10 @@ CORE_PROMPT = "prompts/core.md"          # xử lý trung tâm: how to process t
 EXTERNAL_PROMPT = "prompts/external.md"  # xử lý ngoài luồng: when to use external services / supplied context
 EXAMPLES_DIR = "prompts/examples"        # example_*.md: worked examples; optional, empty files are ignored
 RULES_DIR = "prompts/rules"              # reference rule files (*.md, *.json) the agent must check; optional
-OUTPUT_SCHEMA = "schemas/output.schema.json"  # output JSON schema written in source code; optional until designed
+RULE_PATTERNS = ["**/*.md", "**/*.json", "**/*.txt"]  # sub-folders allowed: a catalog may be a folder of documents
+# Fixed follow-up instructions (dev-entered), sent as a user turn when an answer must be redone. The code fills only the
+# runtime placeholders: {problems} (output errors) in fix_format.md, {gaps} (evidence still missing) in reevaluate.md.
+FOLLOW_UPS = {"fix_format": "prompts/fix_format.md", "reevaluate": "prompts/reevaluate.md"}
 REQUIRED = (("soul", SOUL_PROMPT), ("core", CORE_PROMPT), ("external", EXTERNAL_PROMPT))
 
 
@@ -70,13 +73,13 @@ def _listed(directory: Path, folder: str, patterns) -> list[str]:
 
 def prompt_files(directory: Path) -> list[str]:
     """Relative paths of every prompt file (for execution revisions); examples/rules in name order."""
-    optional = [OUTPUT_SCHEMA] if (directory / OUTPUT_SCHEMA).is_file() else []
     return [*(relative for _, relative in REQUIRED), *_listed(directory, EXAMPLES_DIR, ["*.md"]),
-            *_listed(directory, RULES_DIR, ["*.md", "*.json"]), *optional]
+            *_listed(directory, RULES_DIR, RULE_PATTERNS),
+            *(relative for relative in FOLLOW_UPS.values() if (directory / relative).is_file())]
 
 
 def load_prompts(directory: Path) -> dict:
-    """{"soul", "core", "external", "examples": [...], "rules": [(name, text)], "output_schema": str}.
+    """{"soul", "core", "external", "examples": [...], "rules": [(name, text)]}.
     Soul, core and external must be filled before any model call."""
     prompts = {}
     for key, relative in REQUIRED:
@@ -85,7 +88,18 @@ def load_prompts(directory: Path) -> dict:
             raise ConfigurationError(f"TODO: fill {directory / relative}")
     prompts["examples"] = [text for relative in _listed(directory, EXAMPLES_DIR, ["*.md"])
                            if (text := _text(directory / relative))]
-    prompts["rules"] = [(Path(relative).name, text) for relative in _listed(directory, RULES_DIR, ["*.md", "*.json"])
-                        if (text := _text(directory / relative))]
-    prompts["output_schema"] = _text(directory / OUTPUT_SCHEMA) if (directory / OUTPUT_SCHEMA).is_file() else ""
+    prompts["rules"] = [(Path(relative).relative_to(RULES_DIR).as_posix(), text)
+                        for relative in _listed(directory, RULES_DIR, RULE_PATTERNS) if (text := _text(directory / relative))]
     return prompts
+
+
+def follow_up_prompt(directory: Path, name: str, **values: str) -> str:
+    """prompts/<name>.md with its {placeholders} replaced by runtime values (context, never instructions).
+    Read only when needed, so an agent that never needs a follow-up does not need the file."""
+    path = directory / FOLLOW_UPS[name]
+    text = _text(path) if path.is_file() else ""
+    if not text:
+        raise ConfigurationError(f"TODO: fill {path}")
+    for key, value in values.items():
+        text = text.replace("{" + key + "}", value)  # plain replace: braces elsewhere in the prompt stay as written
+    return text

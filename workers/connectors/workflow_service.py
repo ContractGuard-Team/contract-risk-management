@@ -9,7 +9,9 @@ class WorkflowServiceClient(ServiceClient):
             raise ValueError("Workflow result identity mismatch")
         if result.get("status") != "completed":
             raise ValueError("Workflow did not complete")
-        final = result.get("results", {}).get("agent_3_recommendation")
-        if not isinstance(final, dict) or final.get("agent_id") != "agent_3_recommendation" or not isinstance(final.get("text"), str) or not final["text"].strip():
-            raise ValueError("Workflow returned no valid Agent 3 output")
-        return final
+        # LangGraph built and schema-checked extraction.v2 from the three agents (orchestration/extraction.py).
+        extraction = result.get("extraction")
+        if not isinstance(extraction, dict) or extraction.get("schema_version") != "2.0.0" \
+                or extraction.get("job_id") != identity["job_id"] or not extraction.get("clauses"):
+            raise ValueError("Workflow returned no valid extraction.v2")
+        return extraction

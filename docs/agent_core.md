@@ -13,6 +13,8 @@
 | File luật | `rules/*.md|*.json` | không | file agent phải đối chiếu; nạp thành system `# Rules: <tên>` |
 | Schema output | `../schemas/output.schema.json` | không | **người dùng thiết kế sau**; khi có file thì nạp thành system `# Output schema` |
 | Example | `examples/*.md` | không | mỗi file một ví dụ; file rỗng bị bỏ qua; nạp theo thứ tự tên file |
+| Yêu cầu sửa output | `fix_format.md` | khi có schema output (cả 3 agent) | gửi lại model khi sai schema/kiểm chéo; code điền `{problems}` |
+| Yêu cầu đánh giá lại | `reevaluate.md` | khi có tool (Agent 2/3) | gửi khi còn `evidence_gaps`; code điền `{gaps}` |
 
 Thứ tự message gửi model: system `soul` → `core` → `external` → `# Rules: ...` → `# Output schema` (nếu có) →
 `# Examples` (nếu có) → bài học long term đã duyệt (nếu có) → lịch sử short term (ContextEngine) → user (request JSON).
@@ -33,6 +35,30 @@ Nguồn nội dung (gói `ContractGuard_4_2-4_5_Package.zip`):
 `plan.md` giữ làm tài liệu quy trình, **không** nạp vào prompt. Loader: `agents/hermes/config_loader.py`
 (`load_prompts`, `prompt_files`, `REQUIRED`). Revision thực thi (cache/describe) băm mọi file prompt/rules/schema +
 config.yaml + 2 prompt memory.
+
+## Schema nghiệp vụ của 3 agent (2026-11-17)
+
+Pydantic trong `agents/<agent>/schemas/` (dùng lại khối chung `common/schemas/business/shared.py`, nên tên trường trùng
+kết quả trả ContractGuard):
+
+| Agent | Đầu vào (`input.py`, kiểm khi build_context) | Đầu ra (`output.py`, `text` của AgentResult) | Đi vào AnalysisResult |
+| --- | --- | --- | --- |
+| 1 | `ChunkContext`: request + workflow chunk (chunk_id, index, count, source_metadata) | `ClassificationResult` mỗi chunk: chunk_id, language, clauses (ChunkClause: clause_id, continuation, complete, number, heading, text, category 11 loại, clause_type, page_start/end, facts), metadata, fact_values, injection_warnings, corrections | clauses, metadata, facts, injection_warnings, document.language/complete |
+| 2 | `RiskScoringContext`: request + workflow.classification | `RiskScoringResult`: clause_verdicts (R01–R20), findings (RiskFinding), checks (đúng 20 mã), evidence_gaps | findings, checks; verdict → scoring 4.5b bằng code |
+| 3 | `RecommendationContext`: request + workflow.risk_scoring | `RecommendationResult`: recommendations (1/finding: recommendation, proposed_text, priority, evidence, references), overall_recommendation, evidence_gaps | findings[].recommendation, references, overall_recommendation |
+
+- Agent khai báo `output_model`; `BaseAgent` gửi JSON Schema sinh từ model (`model_json_schema()`) vào system
+  `# Output schema`, kiểm câu trả lời bằng model + `check_output` (Agent 1 đúng chunk_id/không trùng mã; Agent 2
+  clause_id phải có trong kết quả Agent 1; Agent 3 đủ đề xuất cho mọi finding). Sai → gửi lại lỗi, tối đa
+  `MAX_FORMAT_RETRIES=2`, rồi `ModelResponseError`. Revision cache/describe gồm schema của model.
+- `context.request` = toàn bộ request.json ContractGuard (không có với job nội bộ). Prompt 3 agent đọc từ đây.
+- Điểm KHÔNG do model tính: `orchestration/scoring.py` (4.5b, `risk_policy.json`; ánh xạ domain cố định
+  phap_ly→legal, tai_chinh→financial, van_hanh→operational, tuan_thu→compliance, ben_thu_ba→third_party, R17→data_privacy,
+  R01/R02→legal; cybersecurity không có rule → not applicable). Khớp báo cáo HD-001 của đối tác (23, medium).
+- Danh mục chờ đối tác: Agent 1 `prompts/rules/BR-RISK-006/`, `prompts/rules/fact_keys/`; Agent 2
+  `prompts/rules/BR-RISK-007/` (.md/.json/.txt, nạp đệ quy). Chưa có → C99, `fact_values={}`, 20 check `not_applicable`.
+- Prompt nén memory `memory/short_term_summary.md` đã điền cho cả 3 agent; `long_term_reflection.md` vẫn trống.
+- Fixture (`MODEL_PROVIDER=fixture`) trả output tối thiểu đúng model từng agent → luồng chạy tới AnalysisResult.
 
 ## Vòng lặp gọi tool + đánh giá lại khi thiếu bằng chứng (`agents/base.py:run`)
 

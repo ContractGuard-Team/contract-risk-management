@@ -19,6 +19,7 @@ from agents.hermes.agent_factory import create_agent, create_agents
 from agents.hermes.config_loader import load_agent_config
 from agents.memory.short_term import memory_context
 from agents.hermes.tool_registry import ToolRegistry
+from agents.agent_3_recommendation.schemas.output import RecommendationResult
 from integrations.external.openai_client import OpenAIChatClient
 from orchestration.pipeline import ContractRiskPipeline
 from orchestration.cache import ContractCache
@@ -81,11 +82,14 @@ def configured_agents(provider):
     agents = create_agents(provider=provider)
     with TemporaryDirectory() as directory:
         for agent in agents.values():
+            agent.output_model = None  # transport/plumbing tests; business models are tested with their own data
             agent.directory = Path(directory) / agent.agent_id
             for relative in PROMPTS:
                 path = agent.directory / relative
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text(f"Test instructions for {relative}", encoding="utf-8")
+            for name, text in (("fix_format", "Sửa: {problems}"), ("reevaluate", "Thiếu căn cứ: {gaps}")):
+                (agent.directory / f"prompts/{name}.md").write_text(text, encoding="utf-8")
         yield agents
 
 
@@ -169,6 +173,40 @@ class ToolLoopTests(unittest.TestCase):
         self.assertNotIn("tool_choice", client.requests[0])
 
 
+class OutputFormatTests(unittest.TestCase):
+    ADVICE = {"recommendations": [{"finding_id": "F1", "recommendation": "Giảm mức phạt", "proposed_text": None,
+                                   "priority": "high", "evidence": [], "references": []}],
+              "overall_recommendation": None, "evidence_gaps": []}
+
+    def run_agent_3(self, *answers):
+        client = ScriptedClient([completion(a) for a in answers])
+        risk = {"agent_id": "agent_2_risk_scoring", "text": json.dumps({"findings": [{"finding_id": "F1"}]})}
+        with configured_agents(OpenAIChatClient(SETTINGS, client)) as agents:
+            agent = agents["agent_3_recommendation"]
+            agent.output_model = RecommendationResult
+            workflow = {"job_id": "j", "contract_id": "c", "contract_version": "1", "risk_scoring": risk}
+            result = agent.run(AgentRequest("contract", {"workflow": workflow}))
+        return client, result
+
+    def test_invalid_output_is_sent_back_with_its_errors(self):
+        client, result = self.run_agent_3("Đây là kết quả: ...", json.dumps(self.ADVICE))
+        self.assertEqual(json.loads(result.text), self.ADVICE)
+        fix = client.requests[1]["messages"][-1]
+        self.assertEqual(fix["role"], "user")
+        self.assertIn("not one JSON object", fix["content"])
+        self.assertEqual(result.usage["prompt_tokens"], 4)  # both calls billed
+
+    def test_agent_cross_check_missing_finding_is_fixed(self):
+        empty = {**self.ADVICE, "recommendations": []}
+        client, result = self.run_agent_3(json.dumps(empty), json.dumps(self.ADVICE))
+        self.assertIn("thiếu đề xuất cho finding: ['F1']", client.requests[1]["messages"][-1]["content"])
+        self.assertEqual(json.loads(result.text)["recommendations"][0]["finding_id"], "F1")
+
+    def test_output_still_invalid_after_retries_fails_the_call(self):
+        with self.assertRaisesRegex(ModelResponseError, "does not match its schema"):
+            self.run_agent_3("x", "y", "z")
+
+
 class AgentBaseTests(unittest.TestCase):
     def test_creation_does_not_require_openai_sdk_or_key(self):
         with patch.dict(os.environ, {}, clear=True), patch.dict("sys.modules", {"openai": None}):
@@ -192,16 +230,30 @@ class AgentBaseTests(unittest.TestCase):
         self.assertEqual(json.loads(rules[0][1])["policy_version"], "1.2.2")
         self.assertIn("partner_document", load_prompts(agents["agent_3_recommendation"].directory)["external"])
 
+    def test_follow_up_instructions_are_dev_prompt_files(self):
+        from agents.hermes.config_loader import FOLLOW_UPS, follow_up_prompt
+        for agent in create_agents(provider=FakeProvider()).values():
+            needed = ["fix_format"] + (["reevaluate"] if agent.agent_id != "agent_1_classification" else [])
+            for name in needed:
+                with self.subTest(agent=agent.agent_id, prompt=name):
+                    placeholder = "{problems}" if name == "fix_format" else "{gaps}"
+                    self.assertIn(placeholder, (agent.directory / FOLLOW_UPS[name]).read_text(encoding="utf-8"))
+                    filled = follow_up_prompt(agent.directory, name, problems="LỖI-X", gaps="THIẾU-Y")
+                    self.assertTrue("LỖI-X" in filled or "THIẾU-Y" in filled)
+                    self.assertNotIn("<!--", filled)  # the dev note is not sent
+        with TemporaryDirectory() as directory, self.assertRaisesRegex(ConfigurationError, "fix_format.md"):
+            follow_up_prompt(Path(directory), "fix_format", problems="x")
+
     def test_rules_and_output_schema_become_system_messages(self):
         with configured_agents(FakeProvider()) as agents:
             agent = agents["agent_2_risk_scoring"]
             (agent.directory / "prompts/rules").mkdir(parents=True)
             (agent.directory / "prompts/rules/policy.json").write_text('{"rules": []}', encoding="utf-8")
-            (agent.directory / "schemas").mkdir()
-            (agent.directory / "schemas/output.schema.json").write_text('{"type": "object"}', encoding="utf-8")
+            agent.output_model = RecommendationResult
             system = [m["content"] for m in agent.build_messages(AgentRequest("contract")) if m["role"] == "system"]
         self.assertEqual(system[3], '# Rules: policy.json\n{"rules": []}')
-        self.assertTrue(system[4].startswith("# Output schema") and system[4].endswith('{"type": "object"}'))
+        self.assertTrue(system[4].startswith("# Output schema"))
+        self.assertEqual(json.loads(system[4].split("\n", 1)[1]), RecommendationResult.model_json_schema())
 
     def test_each_instruction_file_is_required(self):
         provider = FakeProvider()
@@ -238,6 +290,10 @@ class AgentBaseTests(unittest.TestCase):
         self.assertEqual(body["context"]["case"], ["one"])
         self.assertEqual(body["context"]["workflow"]["risk_scoring"]["text"], "model result")
         self.assertEqual(first_user(client.requests[1])["context"]["workflow"]["classification"]["chunk_count"], 1)
+        # LangGraph hands the job id with the aggregate to Agent 2, and on to Agent 3.
+        to_agent_2, to_agent_3 = (first_user(client.requests[i])["context"]["workflow"] for i in (1, 2))
+        self.assertTrue(to_agent_2["job_id"])
+        self.assertEqual((to_agent_2["classification"]["job_id"], to_agent_3["job_id"]), (to_agent_2["job_id"],) * 2)
         self.assertEqual(result["agent_3_recommendation"]["usage"]["completion_tokens"], 3)
 
     def test_named_agent_methods_return_specific_output(self):

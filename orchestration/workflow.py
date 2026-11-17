@@ -57,7 +57,7 @@ class WorkflowSteps:
         with self.observer.span("aggregate_classification") as observation:
             observation.summary(input={"expected_chunk_count": state["contract"]["expected_chunk_count"]})
             key = state["cache_key"]
-            aggregate = aggregate_contract(state["contract"], self.cache, key)
+            aggregate = aggregate_contract(state["contract"], self.cache, key, state.get("job_id"))
             self.cache.put(key, "aggregate", aggregate)
             if self.cache.get(key, "aggregate") != aggregate:
                 raise ValueError("Agent 1 aggregate could not be read back; keep memory for retry")
@@ -79,7 +79,8 @@ class WorkflowSteps:
                 memory = create_contract_memory(self.policies[agent_id], self.summarizers[agent_id],
                                                 counter=self.counter)
                 request = handoff_request(self.agents[agent_id], contract, source_name, source,
-                                          self.policies[agent_id], self.summarizers[agent_id], self.counter, key)
+                                          self.policies[agent_id], self.summarizers[agent_id], self.counter, key,
+                                          job_id=state.get("job_id"))
                 result = self.agents[agent_id].run(request, memory=memory, observer=self.observer)
                 cached = {"result": asdict(result), "memory": memory.snapshot(),
                           "input_context": request.context}

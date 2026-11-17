@@ -5,48 +5,59 @@ input-processing -> LangGraph -> 3 agents, result in S3 before completion before
 - turns `analysis_requested` + results/<job>/request.json into the worker's QueueJob, answers `ping` with `pong`;
 - publishes progress / completed / failed to the analysis-results queue;
 - writes the validated source to clean_file_key, the result to result_key, and removes the quarantine file.
-Every S3 key comes from request.json (never composed here) and is checked against its required prefix.
+Business schemas (common/schemas/business/): inbound.py = everything ContractGuard sends (InboundMessage,
+AnalysisRequest — every field kept and passed to the agents as context["request"]); outbound.py = everything it
+receives (OutboundMessage, AnalysisResult — built and validated by the LangGraph service). Every S3 key comes from
+request.json, never composed here.
 """
 import json
 import logging
 import mimetypes
-import re
 import time
 
+from pydantic import ValidationError
+
+from common.schemas.business.inbound import AnalysisRequest, InboundMessage
+from common.schemas.business.outbound import OutboundMessage
 from workers.contracts import SourceError
 
 log = logging.getLogger(__name__)
 MESSAGE_VERSION = "1"
 MAX_RECEIVES = 3            # partner queues move a message to the DLQ after 3 receives
 KEEPALIVE_SECONDS = 300     # backend marks a job failed after 20 min without any message
-PREFIXES = {"source_file_key": "quarantine/", "clean_file_key": "clean/", "result_key": "results/"}
-# Limits the worker enforces itself (only ever tighter than the host limits).
-# shortcut: key names assumed from the integration doc; confirm against contracts/analysis-request.v1.schema.json.
-LIMIT_KEYS = ("max_file_bytes", "max_pages")
-# shortcut: provisional codes until ContractGuard shares its error_code catalogue; agree them with SE.
-ERR_INPUT, ERR_PROCESSING = "ERR-AI-001", "ERR-AI-002"
+# Worker stage -> ContractGuard progress step; stages not listed send nothing.
+STEPS = {"downloading": "reading_file", "dispatching": "reading_file", "processing": "reading_file",
+         "agent_1": "splitting_clauses", "agent_2": "evaluating", "agent_3": "evaluating", "saving_result": "scoring"}
+# ERR-UPL-004 (more than the allowed pages) is the partner's own code; the two AI codes stay provisional.
+# shortcut: provisional codes until ContractGuard shares its full ERR-* catalogue; agree them with SE.
+ERR_INPUT, ERR_PROCESSING, ERR_TOO_MANY_PAGES = "ERR-AI-001", "ERR-AI-002", "ERR-UPL-004"
 
 
-# §3 worker -> backend messages: exact field set per event_type (message_version/event_type/job_id always present).
-OUTBOUND = {"progress": {"step"}, "completed": {"result_key"}, "failed": {"failure_reason", "error_code"}, "pong": set()}
+def input_error(message, code=None):
+    """SourceError carrying the ERR-* code the `failed` message reports."""
+    error = SourceError(message)
+    error.error_code = code
+    return error
+
+
+def _invalid(what, exc: ValidationError) -> SourceError:
+    detail = "; ".join(f"{'.'.join(map(str, e['loc'])) or '(root)'}: {e['msg']}" for e in exc.errors()[:5])
+    return SourceError(f"{what}: {detail}")
 
 
 def check_outbound(message):
-    """Refuse to publish anything that does not match §3 (backend drops malformed messages silently).
-    shortcut: hand-written from the integration doc; swap in contracts/queue-messages.v1.schema.json once shared."""
-    fields = OUTBOUND.get(message.get("event_type"))
-    if fields is None or set(message) != {"message_version", "event_type", "job_id", *fields}:
-        raise ValueError(f"Outbound message does not match §3: {sorted(message)}")
-    for name in ("message_version", "job_id", *fields):
-        if not isinstance(message[name], str) or not message[name].strip():
-            raise ValueError(f"Outbound {name} must be a non-empty string")
-    if message["message_version"] != MESSAGE_VERSION or len(message["job_id"]) > 256:
-        raise ValueError("Outbound message_version/job_id invalid")
-    if "result_key" in message and not re.fullmatch(r"results/[^/]+/extraction\.json", message["result_key"]):
-        raise ValueError("Outbound result_key must be results/<job>/extraction.json")
-    if len(message.get("failure_reason", "")) > 300 or len(message.get("step", "")) > 64:
-        raise ValueError("Outbound failure_reason/step too long")
-    return message
+    """Refuse to publish anything that is not an OutboundMessage (the backend drops malformed messages silently).
+    Returns the message exactly as it will be sent."""
+    try:
+        model = OutboundMessage.validate_python(message)
+    except ValidationError as exc:
+        raise ValueError(str(_invalid("Outbound message", exc))) from None
+    data = model.model_dump(exclude_none=True)
+    if data != message:
+        raise ValueError(f"Outbound message has unexpected fields: {sorted(set(message) ^ set(data))}")
+    if data["event_type"] == "completed" and not data["result_key"].endswith("/extraction.json"):
+        raise ValueError("Outbound result_key must be results/<job>/extraction.json")  # partner IAM: this name only
+    return data
 
 
 def is_input_error(exc):
@@ -55,19 +66,13 @@ def is_input_error(exc):
     return isinstance(exc, (SourceError, json.JSONDecodeError))
 
 
-def _key(value, name, prefix):
-    if not isinstance(value, str) or not value.startswith(prefix) or ".." in value or len(value) > 1024:
-        raise SourceError(f"{name} must be an S3 key under {prefix}")
-    return value
-
-
 def extraction(event, result, partner):
-    """Content written to result_key.
-    shortcut: provisional layout (document.clean_file_key + agent output); map to contracts/extraction.v2.schema.json
-    once ContractGuard shares it, the backend rejects results that do not validate."""
-    return {"schema": "extraction.v2", "job_id": event["job_id"],
-            "document": {"clean_file_key": partner["clean_file_key"], "source_file_key": partner["source_file_key"]},
-            "output_language": partner.get("output_language"), "result": result}
+    """Content written to result_key: the AnalysisResult the LangGraph service built and validated."""
+    if result.get("schema_version") != "2.0.0" or result.get("job_id") != event["job_id"]:
+        raise ValueError("Workflow result is not the AnalysisResult of this job")
+    if result["document"].get("clean_file_key") != partner["clean_file_key"]:
+        raise ValueError("Result document.clean_file_key differs from request.json")
+    return result
 
 
 class PartnerProtocol:
@@ -78,53 +83,28 @@ class PartnerProtocol:
     # --- inbound -------------------------------------------------------------------------------------
     def read(self, body):
         """("ping", job_id) | ("job", QueueJob body). Raises SourceError for a request that can never succeed."""
-        message = json.loads(body) if isinstance(body, str) else body
-        if not isinstance(message, dict) or message.get("message_version") != MESSAGE_VERSION:
-            raise SourceError("Unsupported ContractGuard message_version")
-        job_id = message.get("job_id")
-        if not isinstance(job_id, str) or not job_id.strip() or len(job_id) > 256:
-            raise SourceError("job_id is required")
-        if message.get("event_type") == "ping":
-            return "ping", job_id
-        if message.get("event_type") != "analysis_requested":
-            raise SourceError("Unsupported event_type")
-        request_key = message.get("request_key")
-        if request_key != f"results/{job_id}/request.json":
-            raise SourceError("request_key must be results/<job_id>/request.json of this job")
-        data, _ = self.storage.read(self.bucket, request_key, max_bytes=256 * 1024)
-        request = json.loads(data)
-        if not isinstance(request, dict):
-            raise SourceError("request.json must be an object")
-        if request.get("job_id") not in (None, job_id):
+        try:
+            message = InboundMessage.validate_python(json.loads(body) if isinstance(body, str) else body)
+        except ValidationError as exc:
+            raise _invalid("ContractGuard message", exc) from None
+        if message.event_type == "ping":
+            return "ping", message.job_id
+        data, _ = self.storage.read(self.bucket, message.request_key, max_bytes=256 * 1024)
+        try:
+            request = AnalysisRequest.model_validate_json(data)
+        except ValidationError as exc:
+            raise _invalid("request.json", exc) from None
+        if request.job_id != message.job_id:
             raise SourceError("request.json belongs to another job_id")
-        keys = {name: _key(request.get(name), name, prefix) for name, prefix in PREFIXES.items()}
-        # The partner's IAM only allows results/*/extraction.json: catch a wrong key before running the agents.
-        if keys["result_key"] != f"results/{job_id}/extraction.json":
-            raise SourceError("result_key must be results/<job_id>/extraction.json")
-        # clean/{workspace}/{contract}/v{n}/source.{ext}: contract and version identify the document version.
-        parts = keys["clean_file_key"].split("/")
-        contract_id = request.get("contract_id") or (parts[2] if len(parts) > 4 else job_id)
-        version = str(request.get("contract_version") or (parts[3].lstrip("v") if len(parts) > 4 else "1"))
-        context = request.get("context") if isinstance(request.get("context"), dict) else {}
-        language, limits = request.get("output_language"), request.get("limits")
-        if language is not None and (not isinstance(language, str) or not re.fullmatch(r"[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})?", language)):
-            raise SourceError("output_language must be a language code such as vi or en")
-        if limits is not None and not isinstance(limits, dict):
-            raise SourceError("limits must be an object")
-        for name in LIMIT_KEYS:
-            value = (limits or {}).get(name)
-            if value is not None and (type(value) is not int or value <= 0):
-                raise SourceError(f"limits.{name} must be a positive integer")
-        # Agents read these from their context (input-processing passes context through unchanged).
-        context = {**context, **({"output_language": language} if language else {}), **({"limits": limits} if limits else {}),
-                   # Agent 3 reads the original through MCP partner_document with these keys (never builds keys itself).
-                   "source_document": {"bucket": self.bucket, "source_file_key": keys["source_file_key"],
-                                       "clean_file_key": keys["clean_file_key"]}}
-        partner = {**keys, "request_key": request_key, "output_language": language, "limits": limits}
-        return "job", {"job_id": job_id, "contract_id": str(contract_id), "contract_version": version,
-                       "source_file_key": keys["source_file_key"], "bucket": self.bucket,
-                       "context": {k: v for k, v in context.items() if k not in ("workflow", "preprocessing", "worker")},
-                       "metadata": {"contractguard": partner}}
+        # Exactly what the partner sent (every field, including any it adds later; no invented nulls).
+        whole = request.model_dump(mode="json", exclude_unset=True)
+        partner = {**{k: whole[k] for k in ("source_file_key", "clean_file_key", "result_key", "declared_file_type",
+                                            "output_language", "limits", "tenant_id")},
+                   "request_key": message.request_key}
+        # The whole request reaches every agent (and the result builder) as context["request"].
+        return "job", {"job_id": request.job_id, "contract_id": request.contract_id,
+                       "contract_version": request.contract_version, "source_file_key": request.source_file_key,
+                       "bucket": self.bucket, "context": {"request": whole}, "metadata": {"contractguard": partner}}
 
     # --- outbound ------------------------------------------------------------------------------------
     def send(self, event_type, job_id, **fields):
@@ -135,8 +115,10 @@ class PartnerProtocol:
         else:
             self.last[job_id] = (self.clock(), fields.get("step"))
 
-    def progress(self, job_id, step):
-        if self.last.get(job_id, (0, None))[1] != step:
+    def progress(self, job_id, stage):
+        """Worker stage -> queue-messages.v1 step; one message per step change."""
+        step = STEPS.get(stage)
+        if step and self.last.get(job_id, (0, None))[1] != step:
             self.send("progress", job_id, step=step)
 
     def keepalive(self, job_id):
@@ -147,7 +129,8 @@ class PartnerProtocol:
 
     def failed(self, job_id, exc):
         reason = str(exc)[:300] if isinstance(exc, SourceError) else type(exc).__name__  # never contract text
-        self.send("failed", job_id, failure_reason=reason, error_code=ERR_INPUT if is_input_error(exc) else ERR_PROCESSING)
+        code = getattr(exc, "error_code", None) or (ERR_INPUT if is_input_error(exc) else ERR_PROCESSING)
+        self.send("failed", job_id, failure_reason=reason, error_code=code)
 
     # --- S3 ------------------------------------------------------------------------------------------
     def store_clean(self, partner, file):
@@ -158,6 +141,8 @@ class PartnerProtocol:
 
     def remove_quarantine(self, partner):
         """Cleanup after `completed` was sent: a failure is logged, never turned into a retry or a `failed`."""
+        if not partner["source_file_key"].startswith("quarantine/"):
+            return  # the upload is already a checked clean/ file: nothing to remove
         try:
             self.storage.delete(self.bucket, partner["source_file_key"])
         except Exception as exc:

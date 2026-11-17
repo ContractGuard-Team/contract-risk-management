@@ -5,11 +5,11 @@ from common.schemas.agent_messages import AgentRequest
 from agents.hermes.context_budget import ContextBudgetExceeded
 
 
-def handoff_request(agent, contract, source_name, source, policy, summarizer, counter, cache_key):
+def handoff_request(agent, contract, source_name, source, policy, summarizer, counter, cache_key, *, job_id=None):
     context = deepcopy(contract["context"])
     if "workflow" in context:
         raise ValueError("'workflow' is reserved for orchestration context")
-    context["workflow"] = {"contract_id": contract["contract_id"], "contract_version": contract["contract_version"],
+    context["workflow"] = {"job_id": job_id, "contract_id": contract["contract_id"], "contract_version": contract["contract_version"],
                            "cache_key": cache_key, source_name: source}
     request = AgentRequest(f"contract:{contract['contract_id']} contract_version:{contract['contract_version']}", context)
     if counter(agent.build_messages(request)) <= policy.max_input_tokens:

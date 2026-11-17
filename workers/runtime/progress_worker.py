@@ -44,8 +44,8 @@ class ProgressWorker:
         output = None
         if event["status"] == "completed":
             result = event.get("result")
-            if not isinstance(result, dict) or result.get("agent_id") != "agent_3_recommendation" or not result.get("text"):
-                raise ValueError("Completion requires Agent 3 output")
+            if not isinstance(result, dict) or result.get("schema_version") != "2.0.0":
+                raise ValueError("Completion requires the workflow's extraction.v2 result")
             partner = event.get("partner")
             if partner:  # ContractGuard decides the key; a redelivered job simply overwrites it (§4.6)
                 from workers.partner import extraction
@@ -54,7 +54,7 @@ class ProgressWorker:
             else:
                 identity = hashlib.sha256(canonical([event["job_id"], event["runtime_id"]]).encode()).hexdigest()
                 # Attempt-scoped key prevents a stale writer from overwriting a newer attempt's artifact.
-                key = f"{self.prefix}/{identity}/{event['owner']}/agent3.json"
+                key = f"{self.prefix}/{identity}/{event['owner']}/extraction.json"
                 output = self.storage.write_json(self.output_bucket, key, {
                     "job_id": event["job_id"], "runtime_id": event["runtime_id"],
                     "contract_id": event["contract_id"], "result": result})

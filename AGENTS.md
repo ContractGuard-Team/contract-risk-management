@@ -239,7 +239,7 @@
 ## Tên mục thống nhất theo schema worker nhận (2026-11-16, mới nhất)
 
 - Mọi thành phần dùng tên mục giống ContractGuard: `version` → **`contract_version`** (ContractInput, Job/chunk của input-processing, LangGraph scope/cache key/kết quả, context Agent 1, QueueJob, CLI `--contract-version`). Message nội bộ cũ của worker dùng `source_file_key` (+ `bucket`, mặc định WORKER_INPUT_BUCKET); đã bỏ `version`, `source`, `s3_bucket`, `s3_key`, `s3_version_id`, không nhận tên cũ. Adapter ContractGuard tạo cùng thân message này.
-- Schema tham chiếu: `docs/schemas/worker_sqs_input.schema.json` (`x-field-names` liệt kê tên chuẩn). Cache LangGraph/agent cũ không dùng lại được (fingerprint đổi). 194/194 unit test.
+- Schema tham chiếu: nay là `common/schemas/worker/sqs_input.schema.json` (xem mục 2026-11-17). Cache LangGraph/agent cũ không dùng lại được (fingerprint đổi). 194/194 unit test.
 
 ## Kiểm tra đồng nhất schema giữa container (2026-11-16, mới nhất)
 
@@ -262,3 +262,19 @@
 - `agents/base.py:run`: vòng function calling với tool MCP (spec từ `list_tools`, ≤6 vòng, lỗi tool trả cho model) + đánh giá lại khi output JSON có `evidence_gaps` không rỗng (≤2 lần). Schema của Agent 2/3 phải có khóa gốc `evidence_gaps`. Đây là nhánh "thiếu dữ liệu → RAG/Search → đánh giá lại" trước đây còn thiếu.
 - MCP tool thứ 10 `partner_document` (chỉ Agent 3): đọc tài liệu gốc trong bucket ContractGuard (`PARTNER_S3_BUCKET=${WORKER_INPUT_BUCKET}`), chỉ `quarantine/`/`clean/`, chỉ đọc; PDF/DOCX/ảnh trích qua service input-processing. Worker thêm `context.source_document`. IAM đối tác chỉ cho GetObject `quarantine/*`.
 - 201/201 unit test; 9/9 image build lại; stack thử: smoke TXT đạt, `partner_document` → input-processing (DOCX) đạt, agent-3 lấy 10 spec tool từ MCP. Chưa gọi OpenAI thật (vòng tool chỉ kiểm bằng client giả), chưa đọc bucket đối tác thật. System prompt A1 ≈ 60 KB, A2 ≈ 55 KB: `configs/memory.yaml` (TODO) phải tính.
+
+## Schema nghiệp vụ (Pydantic) vào/ra ContractGuard + 3 agent + nén memory (2026-11-17, mới nhất)
+
+- Đọc mục cuối `docs/workers.md` và mục "Schema nghiệp vụ của 3 agent" trong `docs/agent_core.md`. Theo yêu cầu người dùng đã XÓA mọi file JSON schema làm trước đó (`common/schemas/worker/*.json`, `agents/*/schemas/output.schema.json`, `docs/schemas/`); không chép file schema của đối tác vào repo.
+- Schema nghiệp vụ RIÊNG bằng Pydantic (có sẵn trong mọi image): `common/schemas/business/inbound.py` (nhận mọi mục ContractGuard gửi, giữ trường lạ), `outbound.py` (trả đủ mọi mục họ nhận, cấm khóa lạ), `shared.py`; agent: `agents/<agent>/schemas/input.py` + `output.py` (ClassificationResult / RiskScoringResult / RecommendationResult). Mục "Output nghiệp vụ vs ContractGuard" phía trên đã được xử lý.
+- Worker đưa TOÀN BỘ request.json vào `context.request` (exclude_unset: đúng như đối tác gửi); prompt, MCP `partner_document`, bộ dựng kết quả đọc từ đây. LangGraph dựng + kiểm `AnalysisResult` (`orchestration/extraction.py`, điểm 4.5b ở `orchestration/scoring.py`), worker chỉ ghi; `WorkflowServiceClient.execute` trả kết quả này.
+- Worker: `check_outbound` = `OutboundMessage`; bước tiến độ 4 giá trị; `limits.max_bytes/max_pages`; kiểm `declared_file_type`; quá trang → ERR-UPL-004. Prompt nén memory 3 agent đã điền.
+- 217/217 unit test; 9/9 image build; stack thử: smoke TXT + PNG và ContractGuard PNG (AnalysisResult + OutboundMessage hợp lệ) đạt. Đối chiếu ngoài repo với file gốc đối tác: 0 lỗi cả hai chiều. Chưa gọi OpenAI thật; danh mục BR-RISK-006/007/fact_key chờ đối tác.
+
+## Kiểm luồng bàn giao + quy định prompt/context (2026-11-17, mới nhất)
+
+- Đọc mục "Bàn giao giữa các agent" trong `docs/agent_workflow.md`. Quy định của người dùng: prompt = giá trị cố định dev nhập từ file; context = giá trị động lúc chạy (result, MCP).
+- `job_id` thật đi qua LangGraph: state → bản tổng hợp Agent 1 → `context.workflow.job_id` của Agent 2/3 (`RiskScoringWorkflow`/`RecommendationWorkflow` bắt buộc). `run_contract(..., job_id, runtime_id=None)`; service truyền runtime riêng, khóa cache không đổi.
+- Đã bỏ 2 câu hướng dẫn viết cứng trong `agents/base.py`: nay là `prompts/fix_format.md` (3 agent) và `prompts/reevaluate.md` (Agent 2/3), `config_loader.follow_up_prompt` chỉ điền `{problems}`/`{gaps}`; thiếu file khi cần → `TODO: fill`. Còn lại trong code chỉ là nhãn (`# Rules`, `# Examples`, `# Output schema`), JSON Schema sinh từ model và mô tả tool MCP.
+- Agent 3: MCP nối 2 bucket — đối tác (`partner_document`) và S3 pháp luật (`s3_list_objects`/`s3_get_object`); prompt service đã ghi rõ cách dùng từng bucket. 219/219 unit test.
+

@@ -135,7 +135,7 @@ def build_mcp(gateway):
     @mcp.tool()
     async def partner_document(key: str, offset: int = 0, max_chars: int = 20000) -> dict:
         """Read the ORIGINAL contract of the current job from ContractGuard's S3 bucket (read-only).
-        key: context.source_document.source_file_key of the request (quarantine/...); clean_file_key also accepted.
+        key: context.request.source_file_key of the job (quarantine/...); clean_file_key also accepted.
         Returns extracted text (PDF/DOCX/scan go through the contract extraction/OCR pipeline) from `offset`,
         at most max_chars (<=50000) characters; call again with next_offset until it is null.
         Quote contract wording from this text exactly; do not paraphrase it as a quote."""

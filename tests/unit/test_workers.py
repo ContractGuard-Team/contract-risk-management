@@ -31,6 +31,12 @@ BODY = {"job_id": "job-test", "contract_id": "contract-test", "bucket": "input-c
         "source_file_key": "contracts/test.txt", "metadata": {"tenant": "demo", "score": 1.5}}
 
 
+def fake_extraction(note, job_id=None, **document):
+    """Smallest stand-in for the LangGraph extraction.v2 the worker persists (the worker never builds it)."""
+    return {"schema_version": "2.0.0", "job_id": job_id or BODY["job_id"], "document": document,
+            "clauses": [{"clause_id": "c1"}], "overall_recommendation": note}
+
+
 def table_client():
     boto3.client("dynamodb", region_name=REGION).create_table(
         TableName="jobs", KeySchema=[{"AttributeName": "job_id", "KeyType": "HASH"}],
@@ -48,7 +54,7 @@ def event(sequence=1, **updates):
 
 def final_event(sequence=2):
     return event(sequence, stage="completed", status="completed", progress=100,
-                 result={"agent_id": "agent_3_recommendation", "text": "fixture recommendation"})
+                 result=fake_extraction("fixture recommendation"))
 
 
 def progress_child(requests, responses, stop):
@@ -102,7 +108,7 @@ class WorkerAWSTests(unittest.TestCase):
                 observations.append({"id": f"obs-{index}", "traceId": row["trace_id"], "endTime": "2026-11-07T00:00:00Z",
                     "metadata": {**identity, "worker_event": {"sequence": index, "stage": stage,
                         "state": "failed" if self.remote_failure else "completed", "progress": index * 20}},
-                    "output": json.dumps({"agent_id": "agent_3_recommendation", "text": "synthetic result"})})
+                    "output": json.dumps(fake_extraction("synthetic result"))})
             return httpx.Response(200, json={"data": observations, "meta": {}})
         client = httpx.Client(transport=httpx.MockTransport(remote))
         self.addCleanup(client.close)
@@ -130,7 +136,7 @@ class WorkerAWSTests(unittest.TestCase):
             row = self.ddb.get(BODY["job_id"])
             self.assertEqual(row["status"], "completed")
             output = self.s3.get_object(Bucket=row["output"]["bucket"], Key=row["output"]["key"])
-            self.assertEqual(json.loads(output["Body"].read())["result"]["text"], "synthetic result")
+            self.assertEqual(json.loads(output["Body"].read())["result"]["overall_recommendation"], "synthetic result")
             original_delete(receipt)
         with patch.object(self.queue, "delete", side_effect=delete) as deleted:
             self.assertEqual(self.worker().handle(self.message()), "completed")
