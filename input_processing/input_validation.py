@@ -45,8 +45,9 @@ def parse_job(data: dict, *, has_file=False) -> Job:
     maximum = options.get("max_tokens", 512)
     if type(maximum) is not int or maximum < 32:
         raise JobError("options.max_tokens must be an integer >= 32")
-    options = {"overlap_tokens": min(64, (maximum - 1) // 2),
-               "min_tokens": min(80, maximum - 1), **options}
+    # No overlap by default: Agent 1 carries a cut clause into the next chunk through its memory; overlapping text
+    # would be read twice and extracted as a second clause. A caller may still ask for overlap explicitly.
+    options = {"overlap_tokens": 0, "min_tokens": min(80, maximum - 1), **options}
     opts = ChunkOptions(**options)
     opts.validate()
     metadata = data.get("source_metadata", {})

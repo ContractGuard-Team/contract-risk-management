@@ -149,9 +149,7 @@ class AgentRuntime:
             return {"text": text}
         memory = create_contract_memory(MemoryPolicy(**payload["policy"]), self.summarizer(observer), payload.get("memory"))
         from agents.shared.tools import JOB_CONTEXT
-        request = (payload["request"].get("context") or {}).get("request") or {}
-        token = JOB_CONTEXT.set({**payload["identity"], "partner_keys": [
-            key for key in (request.get("source_file_key"), request.get("clean_file_key")) if key]})
+        token = JOB_CONTEXT.set(dict(payload["identity"]))  # MCP resolves this job's documents itself
         try:
             result = self.agent.run(AgentRequest(**payload["request"]), memory=memory, observer=observer)
         finally:

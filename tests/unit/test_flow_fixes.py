@@ -51,6 +51,9 @@ class WorkerTests(unittest.TestCase):
 
 
 class FakePartner:
+    def job_keys(self, job_id):  # request.json of each job, as the real reader loads it from the partner bucket
+        return {"job-7": ["quarantine/u/7.pdf"]}.get(job_id, [])
+
     def read(self, key, offset=0, max_chars=15000, *, allowed=()):
         return {"key": key, "allowed": list(allowed)}
 
@@ -72,7 +75,7 @@ class McpJobBindingTests(unittest.TestCase):
                 time.sleep(0.05)
             try:
                 client = McpToolClient(f"http://127.0.0.1:{port}/mcp", TOKEN)
-                token = JOB_CONTEXT.set({"job_id": "job-7", "trace_id": "a" * 32, "partner_keys": ["quarantine/u/7.pdf"]})
+                token = JOB_CONTEXT.set({"job_id": "job-7", "trace_id": "a" * 32})
                 try:
                     result = client.call("partner_document", {"key": "quarantine/u/7.pdf"})
                 finally:
@@ -122,6 +125,55 @@ class CompactedHandoffTests(unittest.TestCase):
         self.assertEqual((compacted["compacted"], compacted["ids"]), (True, ["F0", "F1", "F2"]))
         answer = {"recommendations": [], "overall_recommendation": None, "evidence_gaps": []}
         self.assertIn("thiếu đề xuất", agent.check_output(answer, request)[0])
+
+
+class InputCoverageTests(unittest.TestCase):
+    def test_text_outside_every_chunk_is_counted(self):
+        from input_processing.pipeline import uncovered_chars
+        chunks = [{"source_spans": [{"cleaned_start": 0, "cleaned_end": 5}]}]
+        self.assertEqual(uncovered_chars("Điều 1 \nĐiều 2", chunks), 6)  # "Điều 2" is in no chunk; spaces ignored
+        self.assertEqual(uncovered_chars("abc", [{"source_spans": [{"cleaned_start": 0, "cleaned_end": 3}]}]), 0)
+
+
+class Agent1GroundingTests(unittest.TestCase):
+    def test_clause_text_facts_and_pages_must_come_from_the_chunk(self):
+        from agents.hermes.agent_factory import create_agent
+        from agents.service import fixture_output
+        from common.schemas.agent_messages import AgentRequest
+        agent = create_agent("agent_1_classification", provider=object())
+        workflow = {"chunk_id": "k0", "chunk_index": 0, "contract_id": "c", "source_metadata": {"pages": [2, 3]}}
+        request = AgentRequest("Điều 1. Bên A thanh toán trong 30 ngày.", {"workflow": workflow})
+        good = fixture_output("agent_1_classification", {"content": request.content, "context": request.context})
+        good["clauses"][0]["facts"] = [{"attribute_name": "payment_days", "value_text": "30 ngày",
+                                        "evidence_quote": "thanh toán trong 30 ngày", "uncertain": False}]
+        self.assertEqual(agent.check_output(good, request), [])
+        bad = json.loads(json.dumps(good))
+        bad["clauses"][0].update(text="Điều 1. Bên A thanh toán ngay.", page_end=9)
+        bad["clauses"][0]["facts"][0]["evidence_quote"] = "thanh toán trong 60 ngày"
+        problems = " ".join(agent.check_output(bad, request))
+        for expected in ("không phải nguyên văn", "trang phải nằm trong 2..3", "evidence_quote không nằm"):
+            self.assertIn(expected, problems)
+
+
+class ExtractionInputTests(unittest.TestCase):
+    def test_malformed_blank_pdf_page_is_an_empty_page(self):
+        import io
+        from pypdf import PdfWriter
+        from common.schemas.files import RetrievedFile
+        from input_processing.text_extraction import extract_document
+        writer = PdfWriter()
+        writer.add_blank_page(200, 200)
+        buffer = io.BytesIO()
+        writer.write(buffer)
+        with patch("pypdf.PageObject.extract_text", side_effect=KeyError("/Contents")):
+            document = extract_document(RetrievedFile(buffer.getvalue(), "blank.pdf"), options={"ocr": "auto"})
+        self.assertEqual((document.text.strip(), document.metadata["page_count"]), ("", 1))
+
+    def test_txt_law_file_becomes_one_page(self):
+        from data_pipeline.processing.extractor import extract_pdfs
+        out = extract_pdfs([("luat.txt", "Điều 1. Phạm vi\nĐiều 2. Đối tượng".encode())])
+        self.assertEqual([(p["page"], p["method"]) for p in out["pages"]], [(1, "text")])
+        self.assertIn("Điều 2. Đối tượng", out["pages"][0]["text"])
 
 
 class MonitoringTests(unittest.TestCase):

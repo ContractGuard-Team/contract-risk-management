@@ -1,191 +1,196 @@
-# Contract Risk Management — base code 3 agent
+# Contract Risk Management AI
 
-Hệ thống hiện có 8 service Docker: worker, input-processing, agent-1/2/3,
-langgraph, monitoring và config. Một `docker-compose.yml` ở root quản lý network,
-volumes, healthcheck, restart và logging. Worker gọi preprocessing rồi LangGraph qua
-HTTP; LangGraph điều phối ba agent. Xem [kiến trúc](docs/architecture.md).
+Hệ thống phân tích rủi ro hợp đồng với ba AI agent, điều phối bằng LangGraph và tích hợp ContractGuard qua AWS SQS/S3. Worker nhận yêu cầu, tiền xử lý hợp đồng, chạy các agent, lưu kết quả và cập nhật tiến độ. Luồng dữ liệu pháp luật riêng cung cấp bằng chứng cho Agent 2/3 qua MCP và RAG.
 
-Chạy local lần đầu: `python scripts/init_env.py`, `docker compose build`,
-`docker compose up -d --wait`. File `.env` hiện tại đã được tạo ở chế độ local fixture,
-worker idle để không gọi AWS thật. Hướng dẫn đầy đủ: [triển khai](docs/deployment_ec2.md)
-và [môi trường/secret](docs/environment.md). Nhật ký thực hiện: [plan_work_note.md](plan_work_note.md).
+Tài liệu mô tả source code tại **2026-11-18**. Hướng dẫn GitHub → EC2 → khởi chạy: **[docs/ec2_setup_guide.md](docs/ec2_setup_guide.md)**.
 
-Luồng đã nối: `ClassificationAgent → RiskScoringAgent → RecommendationAgent`.
-Mỗi agent gọi `OpenAIChatClient` (integrations/external/openai_client.py) → OpenAI Chat Completions
-(SDK `openai`); tin nhắn đã ở dạng chat OpenAI nên không cần bộ chuyển đổi. Bedrock đã bị gỡ (2026-11-14).
+## Luồng phân tích hợp đồng
 
-Đây là nền gọi model bằng văn bản. Chưa khởi động vòng lặp `AIAgent` của Hermes,
-chưa tự gọi tool, chưa có PostgreSQL/RAG hoặc luật chấm điểm nghiệp vụ. HTTP service nội bộ đã có cho container.
-Đã có LangGraph, memory qua ContextEngine Hermes, cache SQLite theo job và callback tiến độ nội bộ.
-Tiền xử lý độc lập: normalize → nhận diện cấu trúc → chunk có nguồn.
-HTTP adapter trả ContractInput cho worker gửi sang workflow. Xem [đánh giá code và cách dùng](docs/input_processing.md).
-Các tool có giao diện và handler có thể đăng ký; chưa đăng ký sẽ báo TODO rõ ràng.
-Không sửa source Hermes gốc.
+```mermaid
+flowchart TB
+    CG[ContractGuard] -->|analysis_requested / ping| Q[SQS requests]
+    Q --> W[Worker: intake + progress]
+    S3I[S3: request.json + hợp đồng] --> W
+    W -->|bytes qua HTTP| P[Input Processing: extraction / OCR / chunking]
+    P -->|ContractInput JSON| W
+    W -->|manifest qua HTTP| G[LangGraph]
+    G -->|từng chunk| A1[Agent 1: phân loại và trích xuất]
+    A1 -->|kết quả từng chunk| G
+    G -->|context tổng hợp Agent 1| A2[Agent 2: đánh giá rủi ro]
+    A2 -->|kết quả + bằng chứng| G
+    G -->|context Agent 2| A3[Agent 3: đề xuất / chỉnh sửa]
+    A3 -->|kết quả| G
+    G -->|tổng hợp 3 agent + tính điểm + kiểm schema| R[AnalysisResult]
+    R --> W
+    W --> S3O[S3: clean file + extraction.json]
+    W --> D[DynamoDB: jobs + job-events]
+    W --> O[SQS results: progress / completed / failed / pong]
+    O --> CG
+    W -->|ACK sau lưu kết quả và thông báo hoàn tất| Q
+    A2 --> MCP[MCP gateway]
+    A3 --> MCP
+    MCP --> K[RAG / Qdrant / Supabase / Tavily / S3]
+    MCP -->|partner_document: tài liệu của job| P
+```
 
-## Cài đặt và kiểm thử
+LangGraph chuyển context giữa các agent; các container agent không import để gọi lẫn nhau. Output Agent 3 quay về LangGraph để dựng kết quả chung rồi mới trả worker.
 
-Python >= 3.11 và < 3.15 (theo source Hermes), chạy tại root của source checkout:
+| Thành phần | Trách nhiệm và dữ liệu bàn giao |
+| --- | --- |
+| Worker | Hai tiến trình intake/progress; SQS, tải S3, runtime ID, lease/heartbeat, gọi processing và LangGraph, ghi tiến độ/kết quả, ACK |
+| Input Processing | Nhận bytes/text; kiểm định dạng/giới hạn; đọc TXT/PDF/DOCX/ảnh và OCR; làm sạch, giữ nguồn/trang, chia chunk; trả `ContractInput` |
+| Agent 1 | Xử lý từng chunk, phân loại/trích xuất điều khoản, kiểm nguồn; cache đủ kết quả rồi tổng hợp cho Agent 2 |
+| Agent 2 | Đánh giá điều khoản, gọi tool lấy bằng chứng, trả findings/checks và phần thiếu bằng chứng |
+| Agent 3 | Đề xuất giảm thiểu/chỉnh sửa, đọc tài liệu gốc qua `partner_document` khi cần; đối chiếu findings của Agent 2 |
+| LangGraph | Thứ tự chạy, handoff, retry lỗi tạm thời, cache/resume, dọn memory ngắn hạn; tính điểm tất định và dựng `AnalysisResult` |
+| MCP | Tool gateway cho Agent 2/3; RAG pháp luật, Qdrant, Supabase, PostgreSQL tùy chọn, Tavily và đọc S3 |
+| Monitoring | Sự kiện HTTP, log JSON, SQLite/outbox, metrics/alerts; chuyển tiến độ cho worker; Langfuse OTLP tùy chọn |
+| Config | Cấp secret theo token và allowlist của từng service từ AWS Secrets Manager |
+
+Model provider dùng **OpenAI Responses API**. Mặc định trong `config.yaml`: Agent 1 `gpt-6-luna`, Agent 2/3 `gpt-6.1-sol`; ghi đè bằng `AGENT_1_MODEL`, `AGENT_2_MODEL`, `AGENT_3_MODEL` hoặc `OPENAI_MODEL`. Đây là cấu hình repository; quyền truy cập model cần kiểm tra bằng tài khoản triển khai.
+
+## Luồng dữ liệu pháp luật
+
+```mermaid
+flowchart LR
+    S[EventBridge Scheduler] --> Q[SQS cập nhật pháp luật]
+    Q --> C[Collector: systemd trên EC2]
+    WEB[vanban.chinhphu.vn] --> C
+    C -->|file gốc| S3[S3 kho tham chiếu]
+    C -->|bytes trong RAM| P[Processor]
+    RETRY[Processor service: retry + refresh] --> P
+    WEB -->|tải lại khi retry| RETRY
+    P --> DB[Supabase: văn bản / phiên bản / quan hệ]
+    P --> V[Qdrant: dense + sparse vectors]
+    V --> R[RAG trong MCP]
+    DB --> MCP[MCP tools]
+    S3 --> MCP
+    R --> MCP
+    MCP --> A[Agent 2 / Agent 3]
+```
+
+`data_pipeline/` chạy bằng **hai service systemd với venv riêng**, ngoài Compose. Collector thu thập Hiến pháp và Luật/Bộ luật; S3 chỉ lưu file gốc. Processor nhận bytes trực tiếp, chuẩn hóa, phân tách Điều, quản lý phiên bản/hiệu lực và ghi Supabase/Qdrant. Processor service xử lý retry và cập nhật hiệu lực theo lịch. Luồng này không xử lý hợp đồng người dùng.
+
+RAG dùng `intfloat/multilingual-e5-large` (1024 chiều), dense + sparse search, lọc hiệu lực/phiên bản, gộp phần của cùng Điều và rerank bằng `jinaai/jina-reranker-v2-base-multilingual`. Model chạy CPU từ `models/`; không cần embedding API key. Xem [thiết kế pipeline](docs/data_pipeline_design.md) và [RAG](docs/rag.md).
+
+## Cấu trúc repository
+
+```text
+contract-risk-management/
+├── agents/
+│   ├── agent_1_classification/   # Agent, config, prompts, context, schemas, memory, tools
+│   ├── agent_2_risk_scoring/
+│   ├── agent_3_recommendation/
+│   ├── hermes/                  # Adapter + hermes_agent/ (source upstream)
+│   ├── memory/                  # Memory và CLI duyệt bài học
+│   └── shared/                  # Context, schema validation, tools dùng chung
+├── common/                      # Schema, settings, ports, auth/HTTP, durable job queue
+├── config/                      # Secret broker, bootstrap và policy.json
+├── configs/memory.yaml          # Ngân sách context/tóm tắt từng agent
+├── data_pipeline/               # Collector, processor, ingestion, migrations SQL
+├── input_processing/            # Validation, extraction/OCR, chunking, HTTP service
+├── integrations/                # OpenAI, MCP client, embedding, PostgreSQL
+├── mcp_server/                  # Tool gateway và các reader dịch vụ
+├── monitoring/                  # Collector, tracing, metrics, alerts, Langfuse exporter
+├── orchestration/               # LangGraph, handoff, cache, retry, scoring, output builder
+├── rag/                         # Retrieval, filters, hybrid search, rerank, evidence
+├── workers/                     # Hai tiến trình, AWS connectors, ContractGuard protocol
+├── infrastructure/
+│   ├── docker/Dockerfile        # Nhiều target: 9 image runtime + image test
+│   ├── requirements/            # Dependency .in và lock .txt theo image/pipeline
+│   ├── ec2/                     # Setup, deploy, preflight, rollback, systemd units
+│   └── aws/                     # IAM policy tham khảo
+├── scripts/                     # init_env.py, download_models.py, preprocess_contract.py
+├── tests/                       # Unit, integration, notebook từng agent và tổng thể
+├── docs/                        # Kiến trúc, giao thức, vận hành và lịch sử kiểm thử
+├── models/                      # Model tải trước, không commit Git
+├── docker-compose.yml           # Compose duy nhất: 9 service
+├── .env.example                 # Mẫu cấu hình host; .env thật không commit
+└── pyproject.toml               # Python package và dependency nền
+```
+
+Source Hermes upstream được giữ nguyên. `__init__.py` rỗng là dấu package Python. [Biên bản dọn project](docs/project_cleanup.md) giải thích các file rỗng đã xóa và những file cố ý giữ lại.
+
+## Schema và dữ liệu bàn giao
+
+| Ranh giới | Định nghĩa chính |
+| --- | --- |
+| ContractGuard → worker | `common/schemas/business/inbound.py`: `InboundMessage`, `AnalysisRequest`; giữ toàn bộ request vào `context.request` |
+| Processing → LangGraph | `common/schemas/contract.py`: `ContractInput`, `ContractChunk`; `contract_id`, `contract_version`, chunks và metadata nguồn |
+| Agent input/output nghiệp vụ | `agents/<agent>/schemas/input.py`, `output.py`: `ClassificationResult`, `RiskScoringResult`, `RecommendationResult` |
+| Envelope model | `common/schemas/agent_messages.py`: `AgentResult` gồm `agent_id`, `text`, `usage`, `stop_reason`; `text` chứa JSON nghiệp vụ được kiểm tra |
+| LangGraph → worker → ContractGuard | `common/schemas/business/outbound.py`: `AnalysisResult` (`schema_version=2.0.0`), `OutboundMessage`; dựng tại `orchestration/extraction.py` |
+
+`job_id`, `runtime_id`, `trace_id`, `request_id` liên kết xử lý/monitoring theo từng phạm vi. Worker tạo runtime ID khi message thiếu. Cache/retry kiểm scope và execution revision; SQLite/Docker volumes phục vụ một host, không bảo đảm model chỉ được gọi đúng một lần trong mọi sự cố.
+
+DynamoDB `contract-risk-jobs` lưu trạng thái hiện tại, khóa `job_id` (String). `contract-risk-job-events` lưu lịch sử thêm mới, khóa `job_id` + `event_id` (String). Cập nhật chịu kiểm soát runtime/lease/sequence. Xem [worker](docs/workers.md) về giao thức nội bộ và chế độ ContractGuard khi có `WORKER_RESULTS_QUEUE_URL`.
+
+## Cấu hình và lưu trữ
+
+- `.env`: region, queue/bucket/table, token bootstrap `CONFIG_TOKEN_*`, model override và tùy chọn vận hành. Tạo từ `.env.example`, không commit.
+- AWS API dùng IAM role trên EC2. API keys và token nghiệp vụ nằm trong secret `contract-risk/prod/api-keys`, cấp theo `config/policy.json`; không đặt vào image.
+- `agents/<agent>/config.yaml`: model/inference. `prompts/`: chỉ dẫn cố định do dev quản lý; context là dữ liệu động. `configs/memory.yaml`: ngân sách theo bộ đếm ước lượng của project, không phải usage token thực tế từ OpenAI.
+- Bảy named volume Docker lưu HTTP jobs, workflow/cache, memory agent và monitoring; `models/` mount chỉ đọc cho MCP. Giữ volumes khi cập nhật ứng dụng.
+- API service nằm trong mạng Compose; monitoring bind loopback host `127.0.0.1:8099` mặc định để data pipeline gửi sự kiện.
+
+Prompt nghiệp vụ và prompt nén ngắn hạn đã có nội dung. Ba file `memory/long_term_reflection.md` còn trống nên bước tự đề xuất bài học được bỏ qua; kho bài học và CLI duyệt vẫn có. Danh mục `BR-RISK-006`, `BR-RISK-007`, `fact_keys` chờ đối tác. Không tự suy diễn nội dung còn thiếu.
+
+## Chạy trên máy phát triển
+
+Dùng Python 3.12 để cùng môi trường với Docker; Docker Engine/Compose ≥ 2.24 nếu chạy stack. Từ root repository:
 
 ```sh
-python -m pip install -e ".[test]"
-python -B -m unittest discover -s tests/unit -p "test_*.py" -v
+python3.12 -m venv .venv312
+. .venv312/bin/activate
+python -m pip install -r infrastructure/requirements/test.txt -r infrastructure/requirements/mcp.txt -r infrastructure/requirements/data_pipeline.txt
+python -m pip install --no-deps -e .
+python -B -m unittest discover -s tests/unit -p 'test_*.py' -v
 ```
 
-Source Hermes nằm trong `agents/hermes/hermes_agent`, code tích hợp ở `agents/hermes/`. Phiên bản này
-chạy từ source checkout/editable install; wheel riêng không đóng gói source Hermes.
-Import hoặc tạo agent không gọi mạng, không tìm credential và không tạo AWS client.
-Unit test dùng client OpenAI giả và prompt tạm, không gọi OpenAI thật.
-Môi trường đã chuẩn bị trong workspace này là `.venv312` (Python 3.12).
-Trên Windows có thể chạy `.\.venv312\Scripts\python.exe` thay cho `python`.
+Windows: tạo venv bằng `py -3.12 -m venv .venv312`, kích hoạt `.\.venv312\Scripts\Activate.ps1`. Chạy từ source checkout vì Hermes, prompt/config và migrations không được đóng thành wheel triển khai độc lập.
 
-## Các phần cố ý để trống
-
-- `.env.example`: `OPENAI_API_KEY` (điền sau), `OPENAI_MODEL` và `AGENT_n_MODEL` tùy chọn. Key chỉ ở root `.env`
-  (gitignored) hoặc Config Service (`AGENT_n_SECRET_BINDINGS`); không điền secret vào source/YAML.
-- Mỗi agent: `config.yaml` và 3 loại prompt (để trống, điền sau; xem [docs/agent_core.md](docs/agent_core.md)):
-  `prompts/core.md` (xử lý trung tâm), `prompts/external.md` (dùng service ngoài/context bổ sung),
-  `prompts/examples/*.md` (ví dụ). core/external phải điền trước khi gọi model.
-  `plan.md` của cả ba agent đã có quy trình; Agent 2/3 ưu tiên database qua MCP,
-  chỉ search web qua MCP khi bằng chứng chưa đủ. MCP và cleanup trong plan chưa có code thực thi.
-- `configs/memory.yaml`: ngân sách input và summary cho từng model.
-- Memory 2 loại, riêng từng agent: short term (`agents/<agent>/memory/short_term_summary.md`, tóm tắt khi vượt
-  ngân sách, xóa sau mỗi hợp đồng) và long term (`agents/<agent>/memory/long_term_reflection.md`, bài học chờ người
-  duyệt, file SQLite riêng `/data/long_term_memory/<agent_id>.sqlite3`). Các prompt này để trống.
-- Input/output nghiệp vụ, công thức điểm, retrieval, API ngoài và kiểm chứng bằng chứng:
-  có điểm mở rộng, chưa tự đặt quy tắc.
-
-Thứ tự chọn model OpenAI: `settings` truyền trực tiếp → `AGENT_1/2/3_MODEL` → `OPENAI_MODEL` → `model` trong
-`config.yaml`. Key chỉ lấy từ `OPENAI_API_KEY`. inference_config: `max_completion_tokens`, `temperature`, `top_p`, `stop`.
-Các giá trị inference để trống sẽ không được gửi. Chỉ điền tham số model hỗ trợ.
-
-## Gọi riêng một agent
-
-Sau khi điền cấu hình và các file Markdown bắt buộc:
-
-```python
-from agents.agent_1_classification.main import create_agent
-from agents.agent_1_classification.schemas.input import ClassificationInput
-
-agent = create_agent()
-result = agent.classify(ClassificationInput(content="Nội dung hợp đồng", context={}))
-print(result.text)
-```
-
-Agent 2 dùng `RiskScoringInput` và `.evaluate(request)`; Agent 3 dùng
-`RecommendationInput` và `.recommend(request)`. Cả ba hỗ trợ `.run(request)`.
-`main.py` cung cấp hàm Python `create_agent()`/`run()`; chưa khởi động server.
-
-## Phân tích hợp đồng nhiều chunk qua LangGraph
-
-Điền các cấu hình/prompt ở trên trước khi gọi thật:
-
-```python
-from orchestration.pipeline import ContractRiskPipeline
-from common.schemas.contract import ContractInput, ContractChunk
-
-contract = ContractInput(
-    contract_id="contract-001",
-    version="v1",
-    chunks=[
-        ContractChunk("chunk-0", 0, "Nội dung phần 1", {"page": 1}),
-        ContractChunk("chunk-1", 1, "Nội dung phần 2", {"page": 2}),
-    ],
-    expected_chunk_count=2,
-    context={},
-)
-pipeline = ContractRiskPipeline()
-try:
-    result = pipeline.run_contract(contract, job_id="analysis-001")
-finally:
-    pipeline.cache.close()
-```
-
-Luồng: Agent 1 lặp từng chunk → cache kết quả/memory → kiểm tra đủ chunk → tổng hợp
-→ context Agent 2 → context Agent 3. Graph chạy cùng tiến trình.
-
-Agent 1 trả bản tổng hợp có danh sách `chunks`; Agent 2/3 giữ text/usage/stop_reason.
-Handoff nằm trong `request.context["workflow"]`, không nhân đôi trong `previous_results`.
-Cache mặc định là `.cache/contracts.sqlite3`. Chạy lại cùng job/input/config sẽ dùng
-kết quả đã lưu; input hoặc prompt thay đổi cần job ID mới.
-
-`.run(text, context)` vẫn dùng được như trường hợp một chunk, tạo job ID mới mỗi lần.
-Tiền xử lý chạy riêng qua `process_job(job, file=...)` hoặc CLI, trả JSON/chunk.
-Gọi Python trực tiếp vẫn nhận `ContractInput`; trong Compose, preprocessing service
-trả manifest này cho worker gửi tới LangGraph service. Xem [memory, cache và phục hồi](docs/agent_workflow.md).
-
-## Nối một tool sau này
-
-```python
-from agents.agent_2_risk_scoring.main import create_agent
-from agents.hermes.tool_registry import ToolRegistry
-
-def configured_risk_handler(payload: dict) -> dict:
-    # TODO: Thay bằng luật chấm điểm đã được xác định.
-    raise NotImplementedError("TODO: implement risk rules")
-
-tools = ToolRegistry()
-tools.register("risk_calculator", configured_risk_handler)
-agent = create_agent(tools=tools)
-# Gọi tường minh sau khi đã triển khai handler:
-# result = agent.run_tool("risk_calculator", payload)
-```
-
-Tên tool nằm trong `tool_functions` của từng agent. Các hàm tool cũng có thể được
-gọi trực tiếp với `handler=...`. Model chưa được cấp tool schema để tự chọn/gọi tool.
-
-## Context và memory
-
-`build_context()` sao chép input, context và kết quả trước; không truy xuất ngầm.
-`ChunkMemory`, `EvidenceManager`, `RecommendationMemory` hỗ trợ `put`, `snapshot`,
-`clear`; tạo instance riêng cho từng job. Truyền snapshot tường minh vào context:
-
-```python
-from agents.agent_1_classification.context.chunk_memory import ChunkMemory
-from agents.hermes.memory_adapter import memory_context
-
-memory = ChunkMemory()
-memory.put("chunk-1", {"text": "Nội dung được giữ lại"})
-context = memory_context(memory)
-```
-
-Các helper ở ví dụ trên vẫn dùng cho dữ liệu tường minh. Workflow mới tự tạo
-`ContractContextEngine` riêng cho từng agent/job và lưu snapshot trong cache.
-Không dùng MEMORY.md/USER.md toàn cục của Hermes.
-`compact_context` và `EvidenceManager.validate` vẫn là hook cho quy tắc riêng;
-việc nén memory trong workflow đi qua `agents/hermes/summarizer.py`.
-
-Tham khảo phân công module trong [docs/folder-responsibilities.md](docs/folder-responsibilities.md).
-
-## Chạy hệ thống qua Docker Compose
+Chạy Compose local; tạo `.env` **chỉ khi chưa có**:
 
 ```sh
-# Chỉ chạy init_env.py nếu chưa có .env; script không ghi đè cấu hình đang có.
 python scripts/init_env.py
+python scripts/download_models.py
+docker compose config --quiet
 docker compose build
-docker compose up -d --wait
+docker compose up -d --wait --wait-timeout 180
 docker compose ps
-docker compose logs --tail 100 worker langgraph monitoring
 ```
 
-8 image dùng các target riêng trong `infrastructure/docker/Dockerfile`; dependency
-khóa tại `infrastructure/requirements/`. Không có Compose hoặc .env riêng trong workers/.
-Không public port host; các service gọi nhau theo tên trên network backend.
+`init_env.py` tạo `APP_ENV=local`, `MODEL_PROVIDER=fixture`, `WORKER_ENABLED=false`. **Local Compose vẫn cần credential đọc Secrets Manager**; fixture chỉ thay model và tắt polling worker. Unit test dùng mock/Moto, không cần tài khoản cloud. Dùng queue thử riêng khi kiểm thử gửi job.
 
-Mode local dùng fixture model tường minh và WORKER_ENABLED=false; health worker cho
-biết đang idle. Để chạy hợp đồng thật, chuyển APP_ENV=production, MODEL_PROVIDER=openai, OPENAI_API_KEY,
-điền cấu hình/prompt/memory và AWS rồi bật WORKER_ENABLED=true. Fixture không thể chạy
-trong production. Các API liên container dùng token; Config Service có token/allowlist
-riêng từng service. Langfuse có thể tắt hoặc chưa có key mà pipeline vẫn chạy.
+Notebook từng agent và tổng thể chạy test offline có sẵn; không đánh giá chất lượng model thật. Xem [tests/README.md](tests/README.md) để chọn test/notebook và [docs/testing.md](docs/testing.md) cho lịch sử kiểm thử container.
 
-Kiểm thử xuyên container (AWS và model giả lập, HTTP/LangGraph/Hermes thật):
+## Triển khai và vận hành
+
+Làm theo [hướng dẫn EC2](docs/ec2_setup_guide.md): GitHub → clone vào `/opt/contract-risk-management` → `.env` → `models/` → build → kiểm IAM/secret/readiness → bật worker. Data pipeline có bước systemd và migration riêng.
 
 ```sh
-docker build --target test -t contract-risk/test:local -f infrastructure/docker/Dockerfile .
-docker run --rm --network contract-risk_backend --env-file .env contract-risk/test:local
+docker compose ps
+docker compose logs --tail 100 worker input-processing langgraph monitoring
+docker compose exec worker python -m workers --check-config
+docker compose down  # Dừng stack và giữ named volumes
 ```
 
-Nếu đổi COMPOSE_PROJECT_NAME, đổi network tương ứng. Image test không nằm trong 8
-service vận hành. Xem [giao thức](docs/container_interfaces.md), [kiểm thử](docs/testing.md),
-[triển khai EC2](docs/deployment_ec2.md), [báo cáo bàn giao](docs/plan_work_report.md)
-và [nhật ký tiến độ](plan_work_note.md). Xem [báo cáo tình trạng các luồng kết nối](docs/current_connections_report.md)
-để biết thành phần nào đã nối, nhánh nào đang tắt và phần nào còn là khung.
+Thay `.env` cần recreate service bằng `docker compose up -d`; đổi secret runtime cần restart service liên quan. Giữ tag image cũ và backup dữ liệu trước thay đổi schema/cache.
+
+Giới hạn hiện tại: cần nghiệm thu model/AWS thật trên môi trường đích; chưa có cơ chế Agent 2/3 tải lại toàn bộ output khi handoff bị nén; chưa có retention chung cho workflow cache; sự cố S3 tại thời điểm lease hết cần kiểm chứng thêm. Báo cáo kiểm thử cũ không thay cho kiểm thử image build từ checkout mới.
+
+## Tài liệu
+
+| Nội dung | Tài liệu |
+| --- | --- |
+| Deploy EC2, update, rollback, systemd | [EC2 setup guide](docs/ec2_setup_guide.md) |
+| Kiến trúc và giao tiếp container | [Architecture](docs/architecture.md), [Container interfaces](docs/container_interfaces.md) |
+| Environment, Secrets Manager | [Environment](docs/environment.md) |
+| Worker, tiền xử lý | [Workers](docs/workers.md), [Input processing](docs/input_processing.md) |
+| Prompt, memory, workflow | [Agent core](docs/agent_core.md), [Agent workflow](docs/agent_workflow.md) |
+| MCP, RAG, dữ liệu pháp luật | [MCP](docs/mcp.md), [RAG](docs/rag.md), [Data pipeline](docs/data_pipeline_design.md) |
+| Monitoring và Langfuse | [Monitoring](docs/monitoring.md), [Langfuse](docs/langfuse_monitoring.md) |
+| Test và kiểm tra image | [Tests](tests/README.md), [Testing history](docs/testing.md), [EC2 readiness history](docs/ec2_readiness.md) |
+| Phân loại file rỗng | [Cleanup](docs/project_cleanup.md) |
+
+[folder-responsibilities.md](docs/folder-responsibilities.md) là bản thiết kế gốc được giữ nguyên; các tên folder/dịch vụ lịch sử trong đó không mô tả runtime hiện tại.

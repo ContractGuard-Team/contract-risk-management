@@ -1,4 +1,3 @@
-from copy import deepcopy
 import json
 
 from common.schemas.agent_messages import AgentRequest
@@ -16,7 +15,8 @@ def source_ids(source_name, source) -> list:
 
 
 def handoff_request(agent, contract, source_name, source, policy, summarizer, counter, cache_key, *, job_id=None):
-    context = deepcopy(contract["context"])
+    from agents.shared.context import agent_context
+    context = agent_context(contract["context"])
     if "workflow" in context:
         raise ValueError("'workflow' is reserved for orchestration context")
     context["workflow"] = {"job_id": job_id, "contract_id": contract["contract_id"], "contract_version": contract["contract_version"],

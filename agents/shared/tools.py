@@ -6,8 +6,8 @@ from common.exceptions import IntegrationNotConfigured
 
 ToolHandler = Callable[[dict], dict]
 
-# Set by the agent service for the job it is running; sent to MCP as the x-job-context header so the gateway can
-# bind partner_document to this job's own documents and tag its events with the job/trace ids.
+# Set by the agent service for the job it is running (its identity); sent to MCP as the x-job-context header so
+# the gateway tags its events with the job/trace ids and partner_document reads only that job's request.json keys.
 JOB_CONTEXT: ContextVar[dict] = ContextVar("job_context", default={})
 
 # Tools served by the MCP gateway (mcp_server/); only Agent 2/3 list them.

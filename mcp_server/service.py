@@ -155,9 +155,10 @@ def build_mcp(gateway):
         Returns extracted text (PDF/DOCX/scan go through the contract extraction/OCR pipeline) from `offset`,
         at most max_chars (<=15000) characters; call again with next_offset until it is null.
         Quote contract wording from this text exactly; do not paraphrase it as a quote.
-        Only this job's own source_file_key / clean_file_key are readable."""
-        allowed = job_context(ctx).get("partner_keys") or []
-        return await gateway.call(ctx, "partner_document", lambda c: c.read(key, offset, max_chars, allowed=allowed))
+        Only this job's own source_file_key / clean_file_key (from its request.json) are readable."""
+        job_id = job_context(ctx).get("job_id")
+        return await gateway.call(ctx, "partner_document",
+                                  lambda c: c.read(key, offset, max_chars, allowed=c.job_keys(job_id)))
 
     return mcp
 

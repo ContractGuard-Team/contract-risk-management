@@ -7,7 +7,7 @@ file mới với token ngẫu nhiên và local fixture mode; không in secret, k
 Compose dùng env_file cho Config broker và environment mapping tường minh cho từng
 service còn lại. Chỉ Config nhận toàn bộ map token principal; mỗi client chỉ nhận
 CONFIG_TOKEN riêng. INTERNAL_API_TOKEN dùng cho API nghiệp vụ nội bộ và tách biệt với
-config token. Không có public port hoặc Docker socket trong Compose.
+config token. Không có Docker socket; monitoring bind loopback `127.0.0.1:8099` mặc định để data pipeline trên host gửi event.
 
 ## Local và production
 
@@ -16,10 +16,11 @@ Ba agent chạy fixture rõ ràng để kiểm tra transport; không tạo phân
 Worker idle có health `mode=idle`, không gọi SQS. Không âm thầm fallback từ OpenAI
 sang fixture khi lỗi. Fixture bị từ chối nếu APP_ENV khác local.
 
-Production: APP_ENV=production, MODEL_PROVIDER=openai; key lấy từ Secrets Manager (mục dưới), đặt OPENAI_MODEL
-(hoặc AGENT_1/2/3_MODEL). Điền prompts/core.md + external.md (+ examples) và config.yaml của từng agent,
-configs/memory.yaml và prompt short_term_summary trước khi cần nén (docs/agent_core.md). Các TODO này được giữ
-nguyên. Readiness báo not_ready nếu model/instructions/budget bắt buộc còn thiếu.
+Production: APP_ENV=production, MODEL_PROVIDER=openai; key lấy từ Secrets Manager (mục dưới).
+Model mặc định trong config.yaml từng agent; OPENAI_MODEL hoặc AGENT_1/2/3_MODEL dùng để ghi đè.
+Prompt nghiệp vụ, configs/memory.yaml và short_term_summary đã có nội dung (2026-11-18).
+Prompt long_term_reflection còn trống nên tự đề xuất bài học đang được bỏ qua. Readiness kiểm cấu hình
+bắt buộc, không kiểm gọi OpenAI thật. Xem [hướng dẫn EC2](ec2_setup_guide.md).
 
 Bật WORKER_ENABLED=true sau khi đặt SQS URL, DynamoDB table, input/output S3 bucket.
 URLs nội bộ do Compose cấp theo service name; không dùng localhost để gọi container khác.
@@ -56,7 +57,7 @@ Config service tự đọc INTERNAL_API_TOKEN thẳng từ Secrets Manager; data
 | agent-2, agent-3 | INTERNAL_API_TOKEN, OPENAI_API_KEY, MCP_API_TOKEN |
 | monitoring | INTERNAL_API_TOKEN, LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY |
 | mcp | INTERNAL_API_TOKEN, MCP_API_TOKEN, TAVILY_API_KEY, QDRANT_URL, QDRANT_API_KEY, SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, SUPABASE_SECRET_KEY |
-| data pipeline (systemd) | QDRANT_URL, QDRANT_API_KEY, SUPABASE_URL, SUPABASE_SECRET_KEY |
+| data pipeline (systemd) | QDRANT_URL, QDRANT_API_KEY, SUPABASE_URL, SUPABASE_SECRET_KEY, INTERNAL_API_TOKEN (gửi monitoring) |
 
 **11 key này KHÔNG có trong `.env`/`.env.example`/docker-compose** (đã xóa để tránh lộ): service chỉ nhận chúng từ Config
 lúc khởi động, giữ trong RAM của tiến trình. `setup.sh` từ chối `.env` còn chứa key nào trong 11 key. Hệ quả: chạy được

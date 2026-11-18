@@ -24,16 +24,24 @@ METADATA_KEYS = ("contract_type", "contract_value", "currency", "effective_date"
 def _merge_chunks(aggregate):
     clauses, languages, warnings, corrections = {}, set(), [], []
     metadata, facts = {"parties": [], **{key: None for key in METADATA_KEYS}}, {}
+    last = None  # clause_id of the last clause seen (document order)
     for chunk in aggregate["chunks"]:
         out = agent_output(AGENT_1, chunk["result"])
+        if out["chunk_id"] != chunk["chunk_id"]:
+            raise ValueError(f"Agent 1 answered chunk {out['chunk_id']} for chunk {chunk['chunk_id']}")
         languages.add(out["language"])
         # Pages come from preprocessing, not from the model: keep each clause inside its chunk's pages
         # (TXT/DOCX have no physical pages -> page 1).
         pages = [p for p in (chunk.get("metadata") or {}).get("pages") or [] if isinstance(p, int) and p > 0] or [1]
-        for clause in out["clauses"]:
+        for position, clause in enumerate(out["clauses"]):
             clause = {**clause, "page_start": min(max(clause["page_start"], min(pages)), max(pages)),
                       "page_end": min(max(clause["page_end"], min(pages)), max(pages))}
             current = clauses.get(clause["clause_id"])
+            if clause["continuation"] and (position or current is None or clause["clause_id"] != last
+                                           or current["complete"]):
+                # Only the first clause of a chunk may continue, and only the previous chunk's cut last clause.
+                raise ValueError(f"Agent 1 continuation of {clause['clause_id']} does not follow a cut clause")
+            last = clause["clause_id"]
             if current is None:
                 clauses[clause["clause_id"]] = {**clause, "facts": list(clause["facts"])}
                 continue

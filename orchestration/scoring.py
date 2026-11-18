@@ -16,7 +16,8 @@ import json
 import math
 from pathlib import Path
 import re
-import unicodedata
+
+from common.text import normalize  # noqa: F401  (also used by orchestration/extraction.py)
 
 POLICY_PATH = Path(__file__).resolve().parents[1] / "agents/agent_2_risk_scoring/prompts/rules/risk_policy.json"
 DOMAINS = ("legal", "financial", "operational", "compliance", "cybersecurity", "data_privacy", "third_party")
@@ -27,13 +28,6 @@ DOMAIN_OF_RULE = {"R17": "data_privacy", "R01": "legal", "R02": "legal"}  # grou
 
 def load_policy(path=POLICY_PATH) -> dict:
     return json.loads(Path(path).read_text(encoding="utf-8"))
-
-
-def normalize(text) -> str:
-    """Policy `matching`: NFKC, straight quotes, whitespace/newlines collapsed (case handled by the caller)."""
-    text = unicodedata.normalize("NFKC", text or "")
-    text = text.translate(str.maketrans({"“": '"', "”": '"', "„": '"', "‘": "'", "’": "'", "‚": "'"}))
-    return " ".join(text.split())
 
 
 def domain_of(rule_id, policy) -> str:

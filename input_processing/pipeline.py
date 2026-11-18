@@ -11,6 +11,15 @@ from input_processing.text_cleaning import normalize_text
 from input_processing.token_counter import checked_counter
 
 
+
+def uncovered_chars(text, chunks):
+    """Non-whitespace characters of the cleaned text that no chunk's source span covers (coverage by offset)."""
+    covered = bytearray(len(text))
+    for chunk in chunks:
+        for span in chunk["source_spans"]:
+            covered[span["cleaned_start"]:span["cleaned_end"]] = b"\x01" * (span["cleaned_end"] - span["cleaned_start"])
+    return sum(1 for index, char in enumerate(text) if not covered[index] and not char.isspace())
+
 def process_job(job_dict: dict, token_counter=None, *, file=None, ocr_engine=None, limits=None) -> dict:
     """Return an error envelope for invalid jobs; unexpected programming/provider errors propagate."""
     data = job_dict if isinstance(job_dict, dict) else {}
@@ -44,6 +53,9 @@ def process_job(job_dict: dict, token_counter=None, *, file=None, ocr_engine=Non
         tokens = [chunk["token_count"] for chunk in chunks]
         if not chunks or any(value > job.options.max_tokens for value in tokens):
             raise JobError("No valid chunks within the requested budget")
+        missing = uncovered_chars(document.text, chunks)
+        if missing:  # text no chunk carries would never reach the agents: fail instead of a silent gap
+            raise JobError(f"{missing} characters of the document are in no chunk")
         source_hash = hashlib.sha256(job.text.encode("utf-8")).hexdigest()
         for chunk in chunks:
             chunk["token_count_method"] = "injected" if token_counter is not None else "utf8_bytes_estimate"

@@ -23,6 +23,8 @@ log = logging.getLogger("data_pipeline.collector")
 MODES = ("incremental", "full")
 
 
+DOCUMENTS_IN_FLIGHT = 4  # documents downloaded/processed at the same time (RAM bound)
+
 async def _collect_one(row, known, *, source, store, archiver, root, today, process, processing):
     start = time.monotonic()
     detail = await source.detail(row)
@@ -106,6 +108,13 @@ async def _collect(mode, *, source, store, archiver, root, today, limit, process
     started = datetime.now(timezone.utc)
     full = mode == "full"
     processing = asyncio.Semaphore(1)
+    # A document's files stay in RAM from download until processed: only a few documents may be in flight at once
+    # (a full run lists ~900 documents).
+    in_flight = asyncio.Semaphore(DOCUMENTS_IN_FLIGHT)
+
+    async def bounded(job):
+        async with in_flight:
+            return await job
 
     def settled(row):
         return not maybe_kept(row["title"]) or decide(store.document_by_docid(row["docid"]), row, full=False) == "unchanged"
@@ -127,8 +136,8 @@ async def _collect(mode, *, source, store, archiver, root, today, limit, process
         elif limit is not None and len(work) >= limit:  # backfill cap: the rest waits for the next run
             counts["deferred"] += 1
         else:
-            work.append(_collect_one(row, known, source=source, store=store, archiver=archiver, root=root, today=today,
-                                     process=process, processing=processing))
+            work.append(bounded(_collect_one(row, known, source=source, store=store, archiver=archiver, root=root,
+                                             today=today, process=process, processing=processing)))
             targets.append(row)
     log.info("to collect: %d new/changed, %d unchanged, %d skipped by title, %d deferred (limit)",
              len(work), counts["unchanged"], counts["skipped"], counts["deferred"])

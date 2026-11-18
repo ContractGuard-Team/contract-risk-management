@@ -54,9 +54,12 @@ def _extract_pdf(data, mode, languages, engine, limits):
             raise JobError("PDF page count is empty or exceeds max_pages")
         for index, page in enumerate(reader.pages):
             # Layout extraction retains native spacing; it is not semantic table recognition.
-            text = page.extract_text(extraction_mode="layout") or ""
-            has_images = bool(page.images)
-            needs_ocr = mode == "always" or (not text.strip() and page.get_contents() is not None)
+            try:
+                text = page.extract_text(extraction_mode="layout") or ""
+                has_images, has_contents = bool(page.images), page.get_contents() is not None
+            except KeyError:  # blank/malformed page dictionary (no /Contents, /Resources...): an empty page
+                text, has_images, has_contents = "", False, False
+            needs_ocr = mode == "always" or (not text.strip() and has_contents)
             method = "pdf_text"
             if needs_ocr:
                 if mode == "never":

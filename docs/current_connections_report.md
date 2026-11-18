@@ -1,5 +1,9 @@
 # Báo cáo tình trạng các luồng và kết nối hiện tại
 
+> Báo cáo lịch sử ngày 2026-11-07, giữ để đối chiếu. Kiến trúc hiện hành nằm ở
+> [README](../README.md) và [architecture.md](architecture.md); source Bedrock và
+> plan_work_note.md nhắc bên dưới đã được thay thế hoặc bỏ khỏi repository.
+
 **Ngày đối chiếu:** 2026-11-07, khoảng 13:59 (Asia/Saigon).  
 **Căn cứ:** source code, `docker-compose.yml`, cấu hình local được kiểm tra mà không
 in secret, trạng thái Docker và phản hồi `/readyz` trực tiếp của tám service.
@@ -225,8 +229,8 @@ container Hermes riêng. Việc có Hermes source không đồng nghĩa đang ch
 hoặc vòng lặp tự gọi tool của Hermes. LangGraph gọi agent/summarizer qua HTTP; lời gọi
 model được thực hiện bên agent, không phải LangGraph gọi Bedrock trực tiếp.
 
-Code kết nối Bedrock có tại [bedrock_provider.py](../agents/hermes/bedrock_provider.py)
-và [bedrock_client.py](../integrations/aws/bedrock_client.py). Cần model/region/IAM,
+Tại thời điểm báo cáo, code kết nối Bedrock nằm trong `agents/hermes/bedrock_provider.py`
+và `integrations/aws/bedrock_client.py` (nay đã bỏ, dùng OpenAI). Khi đó cần model/region/IAM,
 instructions và memory budgets phù hợp trước khi bật production; chưa xác minh AWS thật.
 
 ## 8. Những luồng chưa nối hoặc đã ngừng sử dụng
@@ -266,7 +270,7 @@ nhánh tùy chọn, chỉ bật khi có cấu hình. RAG/MCP/data_pipeline cần
 riêng nếu muốn agent tra cứu luật/thị trường/doanh nghiệp.
 
 Tham chiếu: [báo cáo triển khai](plan_work_report.md), [kiểm thử](testing.md),
-[hướng dẫn EC2](deployment_ec2.md), [nhật ký tiếp tục](../plan_work_note.md).
+[hướng dẫn EC2](ec2_setup_guide.md); nhật ký `plan_work_note.md` cũ không còn trong repo.
 
 ## 10. Kiểm tra lại năm điểm bàn giao theo yêu cầu (2026-11-07)
 

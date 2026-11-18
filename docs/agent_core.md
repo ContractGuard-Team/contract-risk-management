@@ -65,7 +65,7 @@ kết quả trả ContractGuard):
 - Tool đưa cho model = các tool MCP đã bind (`bind_mcp_tools`); spec (tên, mô tả, JSON schema tham số) lấy từ
   `list_tools` của MCP gateway ở lần gọi model đầu tiên (`ToolRegistry.spec_loader`), alias đổi tên (`legal_reference`).
   Agent 1 không có tool → gọi model một lần như cũ (không gửi tham số `tools`).
-- OpenAI Chat Completions function calling: `finish_reason="tool_calls"` → chạy từng tool (`run_tool`, span `tool.*`) →
+- OpenAI Responses API function calling (output item `function_call`) → chạy từng tool (`run_tool`, span `tool.*`) →
   thêm message `tool` → gọi lại. Tối đa `MAX_TOOL_ROUNDS=6` vòng mỗi lượt đánh giá; hết thì gọi với `tool_choice="none"`.
   Lỗi tool (chưa cấu hình, sai tham số, upstream lỗi) trả về cho model dưới dạng `{"error", "message"}`, không làm hỏng job.
   Kết quả tool cắt ở 20.000 ký tự (dùng `offset` của tool để đọc tiếp).
@@ -132,3 +132,32 @@ EC2 cần chuyển sang kho dùng chung.
 - Handoff bị nén kèm `ids` (mọi clause_id cho Agent 2, mọi finding_id cho Agent 3) để kiểm chéo vẫn chạy.
 - Kết quả cuối: verdict có trích dẫn không nằm trong điều khoản không được tính điểm (`dropped_verdicts`); trùng
   `clause_id` mà không phải nối tiếp → lỗi; trang điều khoản kẹp trong trang của chunk (TXT/DOCX = trang 1).
+
+## Model + Responses API + ngân sách (2026-11-18)
+
+- Model (người dùng chọn, `agents/<agent>/config.yaml`): Agent 1 `gpt-6-luna`, Agent 2/3 `gpt-6.1-sol`. Cả hai: context
+  1.050.000, tối đa 922.000 token vào, 128.000 token ra (developers.openai.com/api/docs/models). Key: `OPENAI_API_KEY`
+  trong Secrets Manager (Config Service); `.env.example` production đã `MODEL_PROVIDER=openai`.
+- GPT-6.1 Sol chỉ gọi tool qua **Responses API** → `OpenAIChatClient` chuyển hẳn sang `client.responses.create`
+  (`store=False`): tự đổi message chat → input item (`function_call`, `function_call_output`), tool → dạng phẳng,
+  `max_completion_tokens` → `max_output_tokens`, `reasoning_effort` → `reasoning.effort`; usage trả về tên cũ
+  (`prompt_tokens`, `completion_tokens`, `*_details`). `stop` không được Responses hỗ trợ → `ConfigurationError`.
+  shortcut: reasoning item không gửi lại giữa các vòng tool.
+- Tham số khởi chạy (`inference_config` trong config.yaml, kiểm khi nạp: effort thuộc none|low|medium|high|xhigh|max,
+  max_completion_tokens là số nguyên dương):
+
+  | Agent | Model | reasoning_effort | max_completion_tokens |
+  | --- | --- | --- | --- |
+  | 1 | gpt-6-luna | medium | 32.000 (chunk mặc định 512 token) |
+  | 2 | gpt-6.1-sol | high | 128.000 (trần model) |
+  | 3 | gpt-6.1-sol | medium | 128.000 (trần model) |
+
+  Token reasoning tính vào `max_output_tokens`; bị cắt → job lỗi, nên để rộng. `temperature`/`top_p` để trống (OpenAI
+  khuyên bỏ trên model reasoning). Sol không có effort `none`. Giá/1M token: Luna $0.1 vào / $0.5 ra, Sol $2 / $10;
+  prompt > 272K token tính gấp 2 giá vào, 1,5 giá ra (ngân sách Agent 2/3 900k có thể vượt mốc này).
+  Tóm tắt memory gửi `max_completion_tokens` = `summary_max_tokens`, effort mặc định (medium) của model.
+- `configs/memory.yaml`: Agent 1 300.000 / tóm tắt 30.000; Agent 2/3 900.000 / 60.000 (đơn vị = byte UTF-8 ước lượng,
+  luôn ≥ token thật nên không vượt 922.000). Agent 1 nhỏ hơn để mỗi chunk không gửi lại toàn bộ lịch sử.
+- Kiểm thêm: Agent 1 `check_output` buộc `clause.text` là nguyên văn của chunk, quote fact nằm trong điều khoản,
+  `value_text` nằm trong quote, trang trong trang của chunk. Context gửi agent bỏ `preprocessing.extraction`
+  (danh sách segment từng trang). Kết quả cuối được dựng + kiểm TRƯỚC khi cache `complete` (`run_contract(finalize=)`).

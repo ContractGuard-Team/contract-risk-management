@@ -1,5 +1,5 @@
 from agents.shared.business_context import check_context
-from agents.shared.context import build_context as build_shared_context
+from agents.shared.context import agent_context, build_context as build_shared_context
 from agents.agent_1_classification.schemas.input import ChunkContext
 from common.schemas.agent_messages import AgentRequest
 from common.schemas.contract import ContractInput
@@ -15,7 +15,7 @@ def build_chunk_request(contract: ContractInput, index: int) -> ClassificationIn
     if "workflow" in contract.context:
         raise ValueError("workflow is reserved for orchestration")
     chunk = contract.chunks[index]
-    context = deepcopy(contract.context)
+    context = agent_context(contract.context)
     context["workflow"] = {
         "contract_id": contract.contract_id, "contract_version": contract.contract_version,
         "chunk_id": chunk.chunk_id, "chunk_index": chunk.index,

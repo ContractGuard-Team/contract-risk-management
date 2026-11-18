@@ -1,9 +1,13 @@
-# TODO: Fill values later. Explicit settings > AGENT_<n>_MODEL > OPENAI_MODEL > this file.
-# The API key comes only from OPENAI_API_KEY (root .env / Config Service), never from this file.
-model:
-# TODO: Set only options supported by the chosen OpenAI model (Chat Completions parameters).
+# Model chosen 2026-11-18. Precedence: explicit settings > AGENT_<n>_MODEL > OPENAI_MODEL > this file.
+# The API key comes only from OPENAI_API_KEY (Secrets Manager via Config Service), never from this file.
+# gpt-6.1-sol: 1,050,000 context window, 922,000 max input, 128,000 max output (developers.openai.com/api/docs/models).
+model: gpt-6.1-sol
+# OpenAI Responses API options. max_completion_tokens -> max_output_tokens (reasoning tokens count toward it;
+# a cut-off answer fails the job), reasoning_effort -> reasoning.effort. temperature/top_p stay empty: OpenAI says to
+# omit them on its reasoning models. `stop` is not supported by the Responses API.
+# Agent 2 chấm cả hợp đồng, phán quyết R01–R20 có bằng chứng: reasoning high, output = trần model (128k).
 inference_config:
-  max_completion_tokens:
+  max_completion_tokens: 128000
+  reasoning_effort: high
   temperature:
   top_p:
-  stop:

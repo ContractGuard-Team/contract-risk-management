@@ -11,7 +11,7 @@ class JobError(ValueError):
 @dataclass(frozen=True)
 class ChunkOptions:
     max_tokens: int = 512
-    overlap_tokens: int = 64
+    overlap_tokens: int = 0
     min_tokens: int = 80
     prepend_heading: bool = True
 

@@ -43,7 +43,10 @@ def extract_pdfs(files, *, languages="vie", dpi=300, ocr_engine=None, convert=to
         document = extract_document(RetrievedFile(data, name), options={"ocr": "auto", "languages": languages},
                                     limits=limits, ocr_engine=ocr_engine)
         warnings += document.warnings
-        for segment in document.segments:
+        # TXT (and other text-only inputs) have no page segments: the whole text is one page.
+        segments = document.segments or ([{"start": 0, "end": len(document.text), "method": "text"}]
+                                         if document.text.strip() else [])
+        for segment in segments:
             pages.append({"page": len(pages) + 1, "file": name, "method": segment.get("method", "pdf_text"),
                           "text": document.text[segment["start"]:segment["end"]]})
     methods = {p["method"] for p in pages if p["text"].strip()}

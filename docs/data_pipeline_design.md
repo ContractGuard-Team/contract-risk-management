@@ -240,7 +240,7 @@ EventBridge Scheduler --(theo lịch, {"mode":"incremental|full"})--> SQS contra
 | --- | --- |
 | `sources/legal_source.py` | parse danh sách/chi tiết, postback `Page$N`, khử trùng docid, vét theo năm |
 | `router/source_classifier.py` | giữ Hiến pháp/Luật/Bộ luật/sửa đổi |
-| `processing/deduplicator.py` | SHA-256, quyết định new/unchanged/recheck (vai trò của `versioning.py`, file đó để trống) |
+| `processing/deduplicator.py` | SHA-256, quyết định new/unchanged/recheck; cập nhật phiên bản ở processor/store. Placeholder `versioning.py` đã bỏ khi cleanup 2026-11-18 |
 | `ingestion/s3_archiver.py` | chỉ bản gốc: `legal/QH15/2024/042-2024-QH15/source/v{n}_{sha8}_{file}` |
 | `ingestion/postgres_writer.py` + `migrations/001_legal_schema.sql` | Supabase (6 bảng, RLS bật) |
 | `processing/extractor.py`, `normalizer.py`, `ingestion/chunker.py`, `processing/validator.py` | OCR (input_processing, Tesseract vie), làm sạch, tách Điều chịu lỗi OCR, kiểm tra |

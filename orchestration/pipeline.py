@@ -85,8 +85,10 @@ class ContractRiskPipeline:
                     outcome = {"skipped": type(exc).__name__}
                 observation.summary(output={key: outcome[key] for key in ("proposed", "skipped") if key in outcome})
 
-    def run_contract(self, contract: ContractInput, *, job_id: str, runtime_id: str | None = None):
-        """job_id: the job (handed to Agent 2/3). runtime_id: optional attempt id; it only isolates the cache."""
+    def run_contract(self, contract: ContractInput, *, job_id: str, runtime_id: str | None = None, finalize=None):
+        """job_id: the job (handed to Agent 2/3). runtime_id: optional attempt id; it only isolates the cache.
+        finalize(result) -> result: builds/validates the final output BEFORE the run is cached as complete, so an
+        invalid output never counts as a finished contract (and Agent 2/3 memory is kept for the retry)."""
         contract.validate()
         if not isinstance(job_id, str) or not job_id.strip():
             raise ValueError("job_id is required for cache isolation/resume")
@@ -121,6 +123,8 @@ class ContractRiskPipeline:
                     result = {"job_id": job_id, "contract_id": contract.contract_id,
                               "contract_version": contract.contract_version, "cache_key": key, "status": "completed",
                               "results": state["results"]}
+                    if finalize is not None:
+                        result = finalize(result)
                     self.cache.put(key, "complete", result)
                     release_run(self.cache, key)  # final result stored: Agent 2/3 memory no longer needed
                     self._learn(result)

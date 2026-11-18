@@ -68,6 +68,7 @@ def verify_handoffs(root, identity, file_bytes, filename, persisted_output, prob
         assert len(chunks) >= 2, "Text fixture must exercise multi-chunk handoff"
         assert preprocessing["source_hash"] == hashlib.sha256(file_bytes.decode("utf-8").encode()).hexdigest()
     print("PASS handoff 1: worker bytes -> Text Extraction/OCR; source metadata retained", flush=True)
+    agent_preprocessing = {k: v for k, v in preprocessing.items() if k != "extraction"}
 
     # 2. Processing manifest survives worker + graph and reaches each Agent 1 input.
     assert gp["contract"] == contract, "Worker changed preprocessing manifest"
@@ -81,7 +82,7 @@ def verify_handoffs(root, identity, file_bytes, filename, persisted_output, prob
         assert workflow["chunk_id"] == chunk["chunk_id"] and workflow["chunk_index"] == chunk["index"]
         assert workflow["chunk_count"] == len(chunks)
         assert workflow["source_metadata"] == chunk["metadata"]
-        assert request["context"]["preprocessing"] == preprocessing
+        assert request["context"]["preprocessing"] == agent_preprocessing  # without per-page segments
         assert request["context"]["handoff_probe"] == probe
         if previous_memory is not None:
             assert payload["memory"] == previous_memory, "Agent 1 prior chunk memory lost"
@@ -100,7 +101,7 @@ def verify_handoffs(root, identity, file_bytes, filename, persisted_output, prob
         assert item["chunk_id"] == chunk["chunk_id"] and item["index"] == chunk["index"]
         assert item["metadata"] == chunk["metadata"]
         assert item["result"] == response["result"], "Agent 1 output changed during aggregation"
-    assert p2["request"]["context"]["preprocessing"] == preprocessing
+    assert p2["request"]["context"]["preprocessing"] == agent_preprocessing
     assert p2["request"]["context"]["handoff_probe"] == probe
     assert_model_received(p2, r2)
     cache_db = Path(root) / "langgraph" / "workflow-cache.sqlite3"
@@ -118,7 +119,7 @@ def verify_handoffs(root, identity, file_bytes, filename, persisted_output, prob
     p3, r3 = a3[0]
     assert p3["request"]["context"]["workflow"]["risk_scoring"] == r2["result"]
     assert graph["results"]["agent_2_risk_scoring"] == r2["result"]
-    assert p3["request"]["context"]["preprocessing"] == preprocessing
+    assert p3["request"]["context"]["preprocessing"] == agent_preprocessing
     assert p3["request"]["context"]["handoff_probe"] == probe
     assert_model_received(p3, r3)
     print("PASS handoff 4: Agent 2 output -> Agent 3 context.workflow.risk_scoring", flush=True)

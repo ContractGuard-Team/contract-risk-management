@@ -43,18 +43,19 @@ class FakeUsage:
         return dict(self.data)
 
 
-def completion(text="model result", reason="stop"):
-    """Shape of openai ChatCompletion used by OpenAIChatClient."""
-    return SimpleNamespace(choices=[SimpleNamespace(finish_reason=reason, message=SimpleNamespace(content=text))],
-                           usage=FakeUsage({"prompt_tokens": 2, "completion_tokens": 3}))
+def completion(text="model result", status="completed", reason=None):
+    """Shape of an openai Responses `Response` used by OpenAIChatClient."""
+    return SimpleNamespace(status=status, incomplete_details=SimpleNamespace(reason=reason),
+                           output=[SimpleNamespace(type="message", content=[SimpleNamespace(type="output_text", text=text)])],
+                           usage=FakeUsage({"input_tokens": 2, "output_tokens": 3}))
 
 
 class FakeClient:
-    """Stands in for openai.OpenAI(): client.chat.completions.create(**kwargs)."""
+    """Stands in for openai.OpenAI(): client.responses.create(**kwargs)."""
     def __init__(self, response=None):
         self.requests = []
         self.response = response
-        self.chat = SimpleNamespace(completions=SimpleNamespace(create=self.create))
+        self.responses = SimpleNamespace(create=self.create)
 
     def create(self, **kwargs):
         self.requests.append(deepcopy(kwargs))
@@ -62,7 +63,7 @@ class FakeClient:
 
 
 def first_user(request):
-    return json.loads(next(m["content"] for m in request["messages"] if m["role"] == "user"))
+    return json.loads(next(m["content"] for m in request["input"] if m.get("role") == "user"))
 
 
 class FakeProvider:
@@ -94,21 +95,20 @@ def configured_agents(provider):
 
 
 def tool_completion(*calls):
-    """ChatCompletion asking for tools: calls = (id, name, arguments JSON)."""
-    message = SimpleNamespace(content=None, tool_calls=[
-        SimpleNamespace(id=i, function=SimpleNamespace(name=n, arguments=a)) for i, n, a in calls])
-    return SimpleNamespace(choices=[SimpleNamespace(finish_reason="tool_calls", message=message)],
-                           usage=FakeUsage({"prompt_tokens": 5, "completion_tokens": 1}))
+    """Response asking for tools: calls = (call_id, name, arguments JSON)."""
+    return SimpleNamespace(status="completed", incomplete_details=None,
+                           output=[SimpleNamespace(type="function_call", call_id=i, name=n, arguments=a) for i, n, a in calls],
+                           usage=FakeUsage({"input_tokens": 5, "output_tokens": 1}))
 
 
 class ScriptedClient(FakeClient):
     def __init__(self, responses):
         super().__init__()
-        self.responses = list(responses)
+        self.queue = list(responses)
 
     def create(self, **kwargs):
         self.requests.append(deepcopy(kwargs))
-        return self.responses.pop(0)
+        return self.queue.pop(0)
 
 
 def bind_tool(agent, name, handler):
@@ -127,11 +127,13 @@ class ToolLoopTests(unittest.TestCase):
             bind_tool(agent, "legal_search", lambda p: searched.append(p) or {"evidence": [{"citation": "Điều 418"}]})
             result = agent.run(AgentRequest("contract"))
         self.assertEqual(searched, [{"query": "phạt vi phạm"}])
-        self.assertEqual(client.requests[0]["tools"][0]["function"]["name"], "legal_search")
-        tool_message = client.requests[1]["messages"][-1]
-        self.assertEqual((tool_message["role"], tool_message["tool_call_id"]), ("tool", "c1"))
-        self.assertIn("Điều 418", tool_message["content"])
-        self.assertEqual(client.requests[1]["messages"][-2]["tool_calls"][0]["function"]["name"], "legal_search")
+        self.assertEqual(client.requests[0]["tools"][0]["name"], "legal_search")  # Responses flat function tool
+        self.assertFalse(client.requests[0]["store"])
+        tool_output = client.requests[1]["input"][-1]
+        self.assertEqual((tool_output["type"], tool_output["call_id"]), ("function_call_output", "c1"))
+        self.assertIn("Điều 418", tool_output["output"])
+        self.assertEqual((client.requests[1]["input"][-2]["type"], client.requests[1]["input"][-2]["name"]),
+                         ("function_call", "legal_search"))
         self.assertEqual(json.loads(result.text)["verdict"], "confirmed")
         self.assertEqual(result.usage["prompt_tokens"], 7)  # both model calls billed
 
@@ -144,7 +146,7 @@ class ToolLoopTests(unittest.TestCase):
             bind_tool(agent, "web_search", lambda p: {"results": [{"url": "https://vbpl.vn/x"}]})
             result = agent.run(AgentRequest("contract"))
         self.assertEqual(json.loads(result.text), {"evidence_gaps": []})
-        retry = client.requests[1]["messages"][-1]
+        retry = client.requests[1]["input"][-1]
         self.assertEqual(retry["role"], "user")
         self.assertIn("Điều 3: chưa có căn cứ phạt", retry["content"])
 
@@ -158,7 +160,7 @@ class ToolLoopTests(unittest.TestCase):
             bind_tool(agent, "legal_search", broken)
             agent.tool_functions = {**agent.tool_functions, "legal_search": agent.tool_functions["qdrant_search"]}
             result = agent.run(AgentRequest("contract"))
-        self.assertIn("IntegrationNotConfigured", client.requests[1]["messages"][-1]["content"])
+        self.assertIn("IntegrationNotConfigured", client.requests[1]["input"][-1]["output"])
         self.assertEqual(len(client.requests), 4)  # first pass + 2 re-evaluations, then the honest gap is kept
         self.assertEqual(json.loads(result.text)["evidence_gaps"], ["thiếu căn cứ"])
 
@@ -191,7 +193,7 @@ class OutputFormatTests(unittest.TestCase):
     def test_invalid_output_is_sent_back_with_its_errors(self):
         client, result = self.run_agent_3("Đây là kết quả: ...", json.dumps(self.ADVICE))
         self.assertEqual(json.loads(result.text), self.ADVICE)
-        fix = client.requests[1]["messages"][-1]
+        fix = client.requests[1]["input"][-1]
         self.assertEqual(fix["role"], "user")
         self.assertIn("not one JSON object", fix["content"])
         self.assertEqual(result.usage["prompt_tokens"], 4)  # both calls billed
@@ -199,7 +201,7 @@ class OutputFormatTests(unittest.TestCase):
     def test_agent_cross_check_missing_finding_is_fixed(self):
         empty = {**self.ADVICE, "recommendations": []}
         client, result = self.run_agent_3(json.dumps(empty), json.dumps(self.ADVICE))
-        self.assertIn("thiếu đề xuất cho finding: ['F1']", client.requests[1]["messages"][-1]["content"])
+        self.assertIn("thiếu đề xuất cho finding: ['F1']", client.requests[1]["input"][-1]["content"])
         self.assertEqual(json.loads(result.text)["recommendations"][0]["finding_id"], "F1")
 
     def test_output_still_invalid_after_retries_fails_the_call(self):
@@ -276,11 +278,12 @@ class AgentBaseTests(unittest.TestCase):
             result = test_pipeline(agents).run("Hợp đồng thử", {"case": ["one"]})
         self.assertEqual(list(result), list(agents))
         self.assertEqual(len(client.requests), 3)
-        self.assertEqual(client.requests[0]["max_completion_tokens"], 42)
-        self.assertNotIn("max_completion_tokens", client.requests[1])
+        self.assertEqual(client.requests[0]["max_output_tokens"], 42)  # Responses name of max_completion_tokens
+        self.assertEqual((client.requests[1]["max_output_tokens"], client.requests[1]["reasoning"]),
+                         (128000, {"effort": "high"}))  # Agent 2's shipped config.yaml
         for request in client.requests:
             self.assertEqual(request["model"], "test-model")
-            soul, core, external = request["messages"][:3]
+            soul, core, external = request["input"][:3]
             self.assertEqual((soul["role"], core["role"], external["role"]), ("system", "system", "system"))
             self.assertNotIn("tools", request)  # no MCP bound: plain single call
             self.assertEqual(soul["content"], "Test instructions for prompts/soul.md")
@@ -405,15 +408,42 @@ class AgentBaseTests(unittest.TestCase):
         self.assertEqual(SETTINGS.public(), {"model": "test-model"})
 
     def test_incomplete_or_empty_openai_response_is_rejected(self):
-        for reason in ("length", "content_filter", "tool_calls", ""):
-            with self.subTest(reason=reason), self.assertRaises(ModelResponseError):
-                OpenAIChatClient(SETTINGS, FakeClient(completion(reason=reason))).generate([])
+        for status, reason in (("incomplete", "max_output_tokens"), ("incomplete", "content_filter"), ("failed", None)):
+            with self.subTest(status=status, reason=reason), self.assertRaises(ModelResponseError):
+                OpenAIChatClient(SETTINGS, FakeClient(completion(status=status, reason=reason))).generate([])
         with self.assertRaises(ModelResponseError):
             OpenAIChatClient(SETTINGS, FakeClient(completion(text=" "))).generate([])
+        with self.assertRaisesRegex(ModelResponseError, "not offered"):  # tool call without offered tools
+            OpenAIChatClient(SETTINGS, FakeClient(tool_completion(("c", "x", "{}")))).generate([])
+        with self.assertRaisesRegex(ConfigurationError, "stop"):
+            OpenAIChatClient(SETTINGS, FakeClient()).generate([], inference_config={"stop": ["x"]})
+
+    def test_responses_request_and_usage_mapping(self):
+        client = FakeClient(SimpleNamespace(status="completed", incomplete_details=None, output=[
+            SimpleNamespace(type="reasoning", content=[]),
+            SimpleNamespace(type="message", content=[SimpleNamespace(type="output_text", text="ok")])],
+            usage=FakeUsage({"input_tokens": 10, "output_tokens": 4, "total_tokens": 14,
+                             "input_tokens_details": {"cached_tokens": 6},
+                             "output_tokens_details": {"reasoning_tokens": 3}})))
+        result = OpenAIChatClient(SETTINGS, client).generate(
+            [{"role": "system", "content": "s"}, {"role": "user", "content": "u"},
+             {"role": "assistant", "content": None, "tool_calls": [
+                 {"id": "c1", "type": "function", "function": {"name": "web_search", "arguments": "{}"}}]},
+             {"role": "tool", "tool_call_id": "c1", "content": "{}"}],
+            inference_config={"max_completion_tokens": 50, "reasoning_effort": "high"})
+        sent = client.requests[0]
+        self.assertEqual(sent["input"], [{"role": "system", "content": "s"}, {"role": "user", "content": "u"},
+                                         {"type": "function_call", "call_id": "c1", "name": "web_search", "arguments": "{}"},
+                                         {"type": "function_call_output", "call_id": "c1", "output": "{}"}])
+        self.assertEqual((sent["max_output_tokens"], sent["reasoning"], sent["store"]), (50, {"effort": "high"}, False))
+        self.assertEqual((result.text, result.stop_reason), ("ok", "stop"))
+        self.assertEqual(result.usage, {"prompt_tokens": 10, "completion_tokens": 4, "total_tokens": 14,
+                                        "prompt_tokens_details": {"cached_tokens": 6},
+                                        "completion_tokens_details": {"reasoning_tokens": 3}})
 
     def test_sdk_failure_is_propagated(self):
         client = FakeClient()
-        client.chat.completions.create = lambda **_: (_ for _ in ()).throw(RuntimeError("OpenAI unavailable"))
+        client.responses.create = lambda **_: (_ for _ in ()).throw(RuntimeError("OpenAI unavailable"))
         with self.assertRaisesRegex(RuntimeError, "OpenAI unavailable"):
             OpenAIChatClient(SETTINGS, client).generate([])
 
@@ -439,10 +469,21 @@ class AgentBaseTests(unittest.TestCase):
         self.assertEqual(agents["agent_2_risk_scoring"].provider.settings.model, "second-model")
         self.assertIsNot(agents["agent_1_classification"].provider, agents["agent_2_risk_scoring"].provider)
 
+    def test_shipped_model_choices(self):
+        with patch.dict(os.environ, {}, clear=True):
+            agents = create_agents()
+        chosen = {agent_id: (agent.provider.settings.model, agent.inference_config) for agent_id, agent in agents.items()}
+        self.assertEqual(chosen, {
+            "agent_1_classification": ("gpt-6-luna", {"max_completion_tokens": 32000, "reasoning_effort": "medium"}),
+            "agent_2_risk_scoring": ("gpt-6.1-sol", {"max_completion_tokens": 128000, "reasoning_effort": "high"}),
+            "agent_3_recommendation": ("gpt-6.1-sol", {"max_completion_tokens": 128000, "reasoning_effort": "medium"})})
+
     def test_malformed_config_fails_clearly(self):
         for text in ("[]", "false", "[not, mapping]", "model: 123", "region: x", "inference_config: [invalid]",
                      "inference_config: []", "inference_config: false",
-                     "inference_config:\n  unknown: 1", "typo: value", "broken: ["):
+                     "inference_config:\n  unknown: 1", "typo: value", "broken: [",
+                     "inference_config:\n  reasoning_effort: turbo", "inference_config:\n  max_completion_tokens: 0",
+                     "inference_config:\n  max_completion_tokens: '32000'"):
             with TemporaryDirectory() as directory:
                 path = Path(directory)
                 (path / "config.yaml").write_text(text, encoding="utf-8")

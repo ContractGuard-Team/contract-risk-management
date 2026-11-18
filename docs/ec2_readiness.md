@@ -1,5 +1,11 @@
 # Kiểm tra image cho Docker trên EC2 — ghi chú bàn giao (2026-11-07)
 
+> Đây là lịch sử kiểm tra theo từng mốc, không phải chứng nhận checkout hiện tại.
+> Ngày 2026-11-18 model/prompt/memory đã có cấu hình; các TODO về chúng bên dưới là trạng thái cũ.
+> Các thay đổi runtime mới nhất chưa được nghiệm thu lại bằng container/OpenAI thật.
+> Dùng [ec2_setup_guide.md](ec2_setup_guide.md) để triển khai; secret nằm trong Secrets Manager,
+> không đặt OPENAI_API_KEY vào `.env` như một số ghi chú lịch sử bên dưới.
+
 Kết luận: **9 image đủ điều kiện kỹ thuật để chạy trên Docker của EC2** (Linux, amd64; arm64/Graviton
 xem bảng). **Hệ thống chưa thể nhận job production** cho tới khi điền các cấu hình còn TODO (model,
 prompt, memory budget) và hạ tầng AWS (IAM role, IMDS hop limit, SQS/S3/DynamoDB). Đây là cấu hình,
@@ -53,7 +59,7 @@ không phải lỗi image: service báo `not_ready` rõ ràng thay vì chạy sa
 | worker, monitoring, config | ~251 MB | base |
 | input-processing | 459 MB | Tesseract eng/osd/vie |
 | agent-1/2/3, langgraph | 743 MB | Hermes + openai 2.54 + langgraph |
-| mcp | 643 MB | rag/, tavily, qdrant-client, supabase, fastembed (model tải lúc chạy vào volume `/models`) |
+| mcp | 643 MB | rag/, tavily, qdrant-client, supabase, fastembed (model đọc offline từ `./models` mount `/models:ro`, tải trước bằng `scripts/download_models.py`; `setup.sh` dừng nếu thiếu) |
 
 - Cả 9 build lại từ code hiện tại; chạy UID `app`, có HEALTHCHECK, linux/amd64; `pip check` sạch; import module chính OK.
 - Không có `.env` hay chuỗi key (tvly-, sb_secret_, sk-lf-, sk-proj-) trong image; container config không chứa 11 key.

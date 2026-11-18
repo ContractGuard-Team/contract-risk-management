@@ -83,7 +83,7 @@ class RetryAndResumeTests(unittest.TestCase):
         self.assertFalse(is_transient(TimeoutError("Internal job exceeded deadline")))
 
     def test_openai_rate_limit_and_outage_become_transient(self):
-        request = httpx.Request("POST", "https://api.openai.com/v1/chat/completions")
+        request = httpx.Request("POST", "https://api.openai.com/v1/responses")
 
         def status(cls, code, error_code):
             return cls("x", response=httpx.Response(code, request=request), body={"code": error_code})
@@ -92,7 +92,7 @@ class RetryAndResumeTests(unittest.TestCase):
             def create(**_):
                 raise error
             stub = type("Stub", (), {})()
-            stub.chat = type("Chat", (), {"completions": type("C", (), {"create": staticmethod(create)})})()
+            stub.responses = type("Responses", (), {"create": staticmethod(create)})()
             return OpenAIChatClient(OpenAISettings("m", "sk-test"), client=stub)
         for error in (status(openai.RateLimitError, 429, "rate_limit_exceeded"),
                       status(openai.InternalServerError, 503, None), openai.APITimeoutError(request=request),

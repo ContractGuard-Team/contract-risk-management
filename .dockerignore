@@ -4,6 +4,9 @@
 .python
 .cache
 **/__pycache__
+**/.pytest_cache
+**/.ruff_cache
+**/.ipynb_checkpoints
 **/*.pyc
 .env
 **/.env

@@ -58,12 +58,16 @@ def create_app():
                 cache_revision="remote-services-v1")
             # Runtime isolates the durable cache (retry keeps the same runtime); job_id goes to Agent 2/3.
             contract = contract_from_payload(payload)
+
+            def finalize(result):
+                # The business result every consumer reads (AnalysisResult); built and validated before the run is
+                # cached as complete. Agent outputs stay in results.
+                result["extraction"], result["extraction_notes"] = build_extraction(
+                    contract, result["results"], job_id=payload["identity"]["job_id"],
+                    trace=workflow_trace(agents, flow.cache_revision))
+                return result
             result = flow.run_contract(contract, job_id=payload["identity"]["job_id"],
-                                       runtime_id=payload["identity"]["runtime_id"])
-            # The business result every consumer reads (ContractGuard extraction.v2); agent outputs stay in results.
-            result["extraction"], result["extraction_notes"] = build_extraction(
-                contract, result["results"], job_id=payload["identity"]["job_id"],
-                trace=workflow_trace(agents, flow.cache_revision))
+                                       runtime_id=payload["identity"]["runtime_id"], finalize=finalize)
             result["job_id"] = payload["identity"]["job_id"]
             result["runtime_id"] = payload["identity"]["runtime_id"]
             guard()

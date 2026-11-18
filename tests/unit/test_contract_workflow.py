@@ -112,6 +112,19 @@ class WorkflowTests(unittest.TestCase):
                 self.assertTrue(saved["result"]["text"])
                 self.assertNotIn("memory", saved)  # released after the final result was stored
 
+    def test_invalid_final_output_is_never_cached_as_complete(self):
+        provider = RecordingProvider()
+        with configured_agents(provider) as agents:
+            flow = pipeline(agents)
+            def broken(result):
+                raise ValueError("final output invalid")
+            with self.assertRaisesRegex(ValueError, "final output invalid"):
+                flow.run_contract(contract(), job_id="job-f", finalize=broken)
+            calls = len(provider.calls)
+            done = flow.run_contract(contract(), job_id="job-f", finalize=lambda r: {**r, "extraction": {"ok": True}})
+        self.assertEqual(done["extraction"], {"ok": True})  # rebuilt on retry, not served from a bad "complete"
+        self.assertEqual(len(provider.calls), calls)  # retry reuses the cached agent outputs: no new model call
+
     def test_runtime_isolates_the_cache_but_agents_get_the_job_id(self):
         provider = RecordingProvider()
         with configured_agents(provider) as agents:
@@ -231,9 +244,16 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(provider.calls, [])
 
     def test_unset_memory_policy_fails_clearly(self):
-        with configured_agents(RecordingProvider()) as agents:
+        from orchestration.pipeline import load_memory_policies
+        with TemporaryDirectory() as directory:
+            empty = Path(directory) / "memory.yaml"
+            empty.write_text("agent_1_classification:\n  max_input_tokens:\n", encoding="utf-8")
             with self.assertRaises(ConfigurationError):
-                ContractRiskPipeline(agents, cache=ContractCache())
+                load_memory_policies(empty)
+        # The shipped budgets load for all three agents and stay under the models' 922,000 input-token limit.
+        policies = load_memory_policies()
+        self.assertEqual(set(policies), {"agent_1_classification", "agent_2_risk_scoring", "agent_3_recommendation"})
+        self.assertTrue(all(p.max_input_tokens <= 922_000 for p in policies.values()))
 
 
 class SummarizerTests(unittest.TestCase):

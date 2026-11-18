@@ -4,7 +4,7 @@ import re
 
 from common.exceptions import ConfigurationError
 from common.settings import OpenAISettings
-from integrations.external.openai_client import INFERENCE_KEYS
+from integrations.external.openai_client import INFERENCE_KEYS, REASONING_EFFORTS
 
 
 @dataclass(frozen=True)
@@ -40,8 +40,13 @@ def load_agent_config(directory: Path, env_prefix: str, settings=None) -> AgentC
     unknown = set(inference) - set(INFERENCE_KEYS)
     if unknown:
         raise ConfigurationError(f"Unknown inference_config keys: {list(unknown)}")
-    # Keep model-specific choices unset. The selected model may impose additional limits.
     configured = {key: value for key, value in inference.items() if value is not None}
+    effort = configured.get("reasoning_effort")
+    if effort is not None and effort not in REASONING_EFFORTS:
+        raise ConfigurationError(f"reasoning_effort must be one of {list(REASONING_EFFORTS)}")
+    tokens = configured.get("max_completion_tokens")
+    if tokens is not None and (isinstance(tokens, bool) or not isinstance(tokens, int) or tokens < 1):
+        raise ConfigurationError("max_completion_tokens must be a positive integer")
     if settings is None:
         settings = OpenAISettings(env.model or (model or "").strip(), env.api_key)
     return AgentConfig(settings, configured)

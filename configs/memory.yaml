@@ -1,14 +1,16 @@
-# TODO: Input budget must reserve room for model output and provider overhead.
-# The default counter is a conservative UTF-8 byte estimate, not a model tokenizer.
-agent_1_classification:
-  max_input_tokens:
-  summary_max_tokens:
+# Input budgets per agent, in the project's counter units: UTF-8 bytes of the messages (+32 per message), which is
+# more than the model's real token count, so a budget here never exceeds the model limit (922,000 input tokens for
+# gpt-6-luna / gpt-6.1-sol). It includes the system prompt (Agent 1 ~60 KB, Agent 2 ~55 KB); output is separate
+# (max 128,000 tokens). Above the budget the older turns are summarised with memory/short_term_summary.md.
+agent_1_classification:   # one call per chunk with the earlier chunks as memory: a smaller budget keeps each call cheap
+  max_input_tokens: 300000
+  summary_max_tokens: 30000
   keep_recent_turns: 1
-agent_2_risk_scoring:
-  max_input_tokens:
-  summary_max_tokens:
+agent_2_risk_scoring:     # the whole Agent 1 aggregate in one call
+  max_input_tokens: 900000
+  summary_max_tokens: 60000
   keep_recent_turns: 1
-agent_3_recommendation:
-  max_input_tokens:
-  summary_max_tokens:
+agent_3_recommendation:   # Agent 2 result + the original document read through MCP
+  max_input_tokens: 900000
+  summary_max_tokens: 60000
   keep_recent_turns: 1

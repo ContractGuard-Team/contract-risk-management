@@ -64,9 +64,6 @@ class QdrantWriter:
             self.client.upsert(self.collection, points[start:start + 64], wait=True)
         return len(points)
 
-    def delete_document(self, symbol):
-        self.client.delete(self.collection, points_selector=self.models.FilterSelector(filter=self._filter(symbol=symbol)), wait=True)
-
     def retire(self, symbol, article_no, valid_to=None):
         self.client.set_payload(self.collection, {"current": False, "valid_to": valid_to}, wait=True,
                                 points=self._filter(symbol=symbol, article_no=article_no, current=True))
@@ -76,11 +73,11 @@ class QdrantWriter:
         return [point_id(symbol, r["article_no"], r.get("valid_from"), part)
                 for r in rows for part in range(len(embedding_parts(r)))]
 
-    def drop_versions(self, symbol, rows):
-        """Remove the points of article versions written by a failed amendment (missing points are ignored)."""
-        if rows:
-            self.client.delete(self.collection, points_selector=self.models.PointIdsList(points=self._ids(symbol, rows)),
-                               wait=True)
+    def drop_versions(self, symbol, rows, keep=()):
+        """Remove the points of these article versions, except ids `keep` rows reuse (missing points are ignored)."""
+        ids = sorted(set(self._ids(symbol, rows)) - set(self._ids(symbol, keep)), key=str)
+        if ids:
+            self.client.delete(self.collection, points_selector=self.models.PointIdsList(points=ids), wait=True)
 
     def reopen_versions(self, symbol, rows):
         """Make retired article versions current again (undo of retire)."""

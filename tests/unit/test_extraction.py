@@ -218,6 +218,20 @@ class ExtractionTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "two different clauses"):
             build_extraction(contract(), self.results, job_id=JOB, trace=TRACE)
 
+    def test_continuation_and_chunk_ids_are_checked(self):
+        chunks = self.results["agent_1_classification"]["chunks"]
+        first, second = (json.loads(c["result"]["text"]) for c in chunks)
+        for broken_first, broken_second, message in (
+                ({**first, "chunk_id": "k9"}, second, "answered chunk k9"),
+                ({**first, "clauses": [first["clauses"][0], {**first["clauses"][1], "complete": True}]}, second,
+                 "does not follow a cut clause"),          # continues a clause that was not cut
+                (first, {**second, "clauses": second["clauses"][::-1]}, "does not follow a cut clause")):  # not first
+            with self.subTest(message=message):
+                chunks[0]["result"] = result("agent_1_classification", broken_first)
+                chunks[1]["result"] = result("agent_1_classification", broken_second)
+                with self.assertRaisesRegex(ValueError, message):
+                    build_extraction(contract(), self.results, job_id=JOB, trace=TRACE)
+
     def test_clause_pages_stay_inside_their_chunk(self):
         chunks = self.results["agent_1_classification"]["chunks"]
         second = json.loads(chunks[1]["result"]["text"])

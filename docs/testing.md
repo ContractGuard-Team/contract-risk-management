@@ -1,5 +1,8 @@
 # Kiểm thử hệ thống multi-container
 
+Danh sách test/notebook hiện hành: [tests/README.md](../tests/README.md).
+Các số lượng và kết quả có ngày bên dưới là lịch sử, không thay cho việc chạy lại checkout mới.
+
 Kết quả ngày 2026-11-07 sau khi thực hiện `plan_work.txt`: **106/106 unit test,
 4/4 notebook, 8/8 image runtime build thành công và 8/8 service healthy**. Pipeline
 xuyên container đạt cả khi Agent 2 có hai replica. AWS dùng Moto và model dùng
@@ -10,7 +13,8 @@ fixture tường minh; đây là nghiệm thu tích hợp local, không phải n
 Tại root repository, Python >=3.11,<3.15; workspace dùng Python 3.12.16:
 
 ```sh
-python -m pip install -e ".[test]"
+python -m pip install -r infrastructure/requirements/test.txt -r infrastructure/requirements/mcp.txt -r infrastructure/requirements/data_pipeline.txt
+python -m pip install --no-deps -e .
 python -B -m unittest discover -s tests/unit -p "test_*.py" -v
 ```
 
@@ -19,7 +23,7 @@ thư mục tạm cho Python/notebook. Test không yêu cầu tài khoản hoặc
 
 | Bộ test | Phạm vi |
 | --- | --- |
-| test_agent_base.py | BaseAgent, client OpenAI giả (request Chat Completions), context, prompt/config validation, tools, memory riêng từng job |
+| test_agent_base.py | BaseAgent, client OpenAI giả (request Responses API), context, prompt/config validation, tools, memory riêng từng job |
 | test_contract_workflow.py | LangGraph và Hermes ContextEngine thật, 40 chunk, tổng hợp/handoff Agent 1 → 2 → 3, budget/summary, cache/resume, thay input/prompt và cô lập hợp đồng |
 | test_input_processing.py | Validation, normalize, cấu trúc, chunk/budget/overlap, provenance, manifest và CLI |
 | test_file_processing.py | PDF/DOCX/TXT/ảnh, bảng/numbering/note, render, metadata, S3 version/stream, giới hạn và lỗi OCR |
@@ -45,13 +49,15 @@ Bốn notebook đã chạy bằng kernel `.venv312`, không cell lỗi:
 
 Source notebook giữ output trống; bản có kết quả nằm trong
 `.cache/executed-notebooks/`, không commit. Notebook service không tự khởi động Docker;
-kiểm thử xuyên container thực tế chạy bằng script dưới đây. Các notebook agent riêng
-còn là khung; logic ba agent được kiểm tra trong unit test và E2E.
+kiểm thử xuyên container thực tế chạy bằng script dưới đây. Từ 2026-11-18, ba notebook agent
+và notebook tổng thể đã gọi lại test offline có sẵn; xem tests/README.md. Bảy notebook khung
+khác đã bỏ, không có test thực thi nào bị xóa. Notebook service tìm root bằng pyproject.toml.
 
 ## Docker và E2E
 
 ```sh
 python scripts/init_env.py  # Chỉ tạo nếu chưa có .env, không ghi đè cấu hình hiện tại.
+python scripts/download_models.py  # models/ không đi theo Git.
 docker compose config --quiet
 docker compose build
 docker compose up -d --wait
@@ -59,7 +65,8 @@ docker build --target test -t contract-risk/test:local -f infrastructure/docker/
 docker run --rm --network contract-risk_backend --env-file .env contract-risk/test:local
 ```
 
-Đổi network nếu đổi COMPOSE_PROJECT_NAME. E2E yêu cầu APP_ENV=local,
+Local Compose hiện vẫn cần credential đọc Secrets Manager, hoặc môi trường secret giả lập riêng
+đã cấu hình cho bài thử. Không chạy bài này vào stack production. Đổi network nếu đổi COMPOSE_PROJECT_NAME. E2E yêu cầu APP_ENV=local,
 MODEL_PROVIDER=fixture và Langfuse tắt. Script `tests/integration/container_smoke.py`
 khởi động Moto HTTP trong test container, tạo SQS/S3/DynamoDB giả, chạy entrypoint
 worker với supervisor/intake/progress thật, gọi các service Compose qua HTTP/DNS.

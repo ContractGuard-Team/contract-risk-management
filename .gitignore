@@ -3,6 +3,9 @@
 .python/
 .cache/
 __pycache__/
+.pytest_cache/
+.ruff_cache/
+.ipynb_checkpoints/
 *.py[cod]
 *.egg-info/
 .env

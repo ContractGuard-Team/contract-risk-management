@@ -1,3 +1,4 @@
+import json
 import os
 import socket
 import threading
@@ -221,8 +222,17 @@ class ConnectorTests(unittest.TestCase):
             s3.put_object(Bucket=bucket, Key="quarantine/u2/other.txt", Body=b"another tenant's contract")
             with self.assertRaisesRegex(PermissionError, "not a document of this job"):
                 reader.read("quarantine/u2/other.txt", allowed=mine)  # readable by IAM, not by this job
+            # Allowed keys come from the job's own request.json, not from the caller.
+            s3.put_object(Bucket=bucket, Key="results/job-1/request.json",
+                          Body=json.dumps({"source_file_key": "quarantine/u1/hd.pdf", "clean_file_key": "clean/x.pdf"}).encode())
+            self.assertEqual(reader.job_keys("job-1"), ["quarantine/u1/hd.pdf", "clean/x.pdf"])
+            self.assertEqual((reader.job_keys("no-such-job"), reader.job_keys("../x")), ([], []))
+            # An all-ASCII PDF is a PDF: extracted by input-processing, never returned as raw bytes.
+            s3.put_object(Bucket=bucket, Key="quarantine/u1/ascii.pdf", Body=b"%PDF-1.4 plain ascii body")
+            self.assertEqual(reader.read("quarantine/u1/ascii.pdf", allowed=["quarantine/u1/ascii.pdf"])["extraction"],
+                             "input-processing")
             self.assertEqual((pdf["text"], pdf["page_count"]), ("Điều 1. Giá\nĐiều 2. Phạt", 2))
-            self.assertEqual(len(processor.calls), 1)
+            self.assertEqual(len(processor.calls), 2)  # hd.pdf once (then cached) + ascii.pdf
             self.assertEqual(processor.calls[0]["identity"]["job_id"], processor.calls[0]["job"]["contract_id"])
             for key in ("results/x/request.json", "quarantine/../results/x", "other/a.txt"):
                 with self.assertRaises(ValueError):

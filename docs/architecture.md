@@ -1,62 +1,47 @@
-# Kiến trúc multi-container — 2026-11-07
+# Kiến trúc hiện tại — 2026-11-18
 
-Triển khai theo plan_work.txt; thay thế thiết kế worker image riêng trước đó.
-Một docker-compose.yml ở root quản lý 8 image/service, network backend và volume.
+Một `docker-compose.yml` quản lý 9 service: worker, input-processing, agent-1/2/3, langgraph, monitoring, config và mcp. Dockerfile nhiều target nằm ở `infrastructure/docker/Dockerfile`. Data pipeline pháp luật là hai service systemd riêng trên cùng EC2.
 
 ```mermaid
 flowchart LR
-    SQS[AWS SQS] --> W[Worker: intake + progress]
-    S3I[AWS S3 input] --> W
-    W --> P[Input Processing]
-    P -->|ContractInput JSON| W
+    SQS[SQS requests] --> W[Worker intake + progress]
+    S3[S3 request / source] --> W
+    W -->|bytes HTTP| P[Input Processing]
+    P -->|ContractInput| W
     W --> G[LangGraph]
-    G --> A1[Agent 1 + Hermes]
-    G --> A2[Agent 2 + Hermes]
-    G --> A3[Agent 3 + Hermes]
-    G -->|result| W
-    W --> S3O[AWS S3 output]
-    W --> DDB[AWS DynamoDB]
-    W -. events .-> M[Monitoring]
-    P -. events .-> M
-    G -. events .-> M
-    A1 -. events .-> M
-    A2 -. events .-> M
-    A3 -. events .-> M
-    C[Config / Secrets] -. access events .-> M
+    G <-->|chunk / output| A1[Agent 1]
+    G <-->|aggregate A1 / output| A2[Agent 2]
+    G <-->|output A2 / output| A3[Agent 3]
+    G -->|AnalysisResult: cả 3 agent + scoring| W
+    W --> OUT[S3 result / DynamoDB / SQS results]
     A2 --> MCP[MCP gateway]
     A3 --> MCP
-    MCP --> WS[Web search]
-    MCP -. base code .-> QD[Qdrant / PostgreSQL / S3]
-    MCP -. events .-> M
-    C --> SM[Secrets Manager / SSM]
-    M -. optional OTLP .-> LF[Langfuse]
+    MCP --> REF[RAG / Qdrant / Supabase / Tavily / S3]
+    MCP -->|partner_document extraction| P
+    C[Config] --> SM[AWS Secrets Manager]
+    M[Monitoring] -->|progress| W
+    M -. OTLP tùy chọn .-> LF[Langfuse]
 ```
 
-- workers/: nhận SQS, runtime/lease/hash, tải S3, gọi HTTP processing rồi graph;
-  progress process ghi S3 trước completed DynamoDB/ACK/DeleteMessage. Langfuse không
-  còn quyết định trạng thái kết thúc. Reader cũ giữ cho tương thích library, Compose không dùng.
-- input_processing/: logic cũ không đổi. service.py thêm durable HTTP job adapter,
-  bytes base64 → process_job → ContractInput JSON, bảo toàn nguồn và metadata.
-- agents/service.py: RPC dùng BaseAgent/Hermes hiện có; mỗi image chọn một AGENT_ID.
-  Nhận/trả memory snapshot, validate execution revision; không clone Hermes lúc chạy.
-- orchestration/: graph/chunk/aggregate/handoff cũ giữ nguyên; RemoteAgent và
-  RemoteSummarizer gọi service. Durable jobs và full-result/memory cache ở volume.
-- config/: broker secret có auth/allowlist theo service, AWS provider chain và
-  runtime secret bootstrap. Không bake secret vào image hoặc trả qua API không auth.
-- monitoring/: push event HTTP + stdout JSON, SQLite/outbox, metrics và Langfuse OTLP
-  tùy chọn. Chỉ nhận field an toàn, không log contract/prompt/secret.
-- common/: auth/HTTP client, bounded JSON, schema và durable job transport dùng chung.
-- infrastructure/docker/: Dockerfile nhiều target; requirements khóa cross-platform.
+## Ranh giới module
 
-Mỗi service có /healthz và /readyz; internal APIs yêu cầu token, Config dùng token riêng.
-Không publish port host, không Docker socket. IAM/resources AWS cấp bên ngoài project.
-Các Docker image độc lập chia sẻ build cache; restart/rebuild từng service bằng Compose.
-SQLite volume hỗ trợ local/EC2 một host; chưa phải checkpoint đa host hoặc exactly-once
-model execution. Caller vẫn có thể dùng API Python truyền ContractInput trực tiếp.
+- `workers/`: AWS connectors và hai tiến trình; không import để gọi agent/processing. Hoàn tất job dựa vào kết quả LangGraph, lưu S3/DynamoDB và thông báo trước ACK. Langfuse không là kênh hoàn tất.
+- `input_processing/`: xử lý bytes/text, validation/OCR/chunk/provenance; HTTP adapter trả `ContractInput`. Không tải S3 hoặc tự gọi Agent 1.
+- `agents/`: BaseAgent, ba schema/prompt/context riêng; provider OpenAI Responses API, tool loop và kiểm output. `agents/hermes/` là adapter; `hermes_agent/` giữ source upstream.
+- `orchestration/`: LangGraph gọi agent HTTP, kiểm revision, tổng hợp chunk, handoff, retry/cache/resume. Dựng `AnalysisResult` từ kết quả ba agent; tính điểm trong `scoring.py`.
+- `mcp_server/` và `rag/`: service MCP cấp tool cho Agent 2/3; connector mở khi cần. RAG giữ bằng chứng và hiệu lực pháp luật. Agent không import RAG qua container.
+- `common/`: schema, settings, ports, HTTP/auth và durable job queue. `config/`: secret bootstrap/broker có token riêng từng principal, allowlist từ `policy.json`.
+- `monitoring/`: event HTTP/stdout, SQLite/outbox, metrics/alerts, forwarding worker và Langfuse OTLP tùy chọn.
+- `data_pipeline/`: collector thu thập web → S3 file gốc và bytes → processor → Supabase/Qdrant. Service processor retry/refresh; không dùng SQS hợp đồng hoặc worker Docker.
 
-Local fixture mode dùng để xác minh kết nối, không phân tích pháp lý thật. Prompt,
-model settings, memory budgets và tool/RAG nghiệp vụ còn TODO được giữ nguyên. Không
-khôi phục apps/, database root, Redis/Lambda; data_pipeline vẫn là luồng kiến thức riêng.
+## Dữ liệu và vận hành
 
-Xem [interface](container_interfaces.md), [environment](environment.md),
-[worker](workers.md), [testing](testing.md), [triển khai](deployment_ec2.md).
+Schema nghiệp vụ nằm trong `common/schemas/business/` và `agents/<agent>/schemas/`. Request đối tác giữ tại `context.request`. Hợp đồng dùng `contract_version`; phiên bản luật của data pipeline là domain riêng. Job/runtime/trace/request IDs được giữ qua các service.
+
+HTTP jobs có auth, idempotency và lease/heartbeat trên SQLite. Bảy named volumes giữ job/cache/memory/monitoring cho một host. Không cam kết checkpoint đa host hoặc exactly-once model call. MCP đọc model cache từ `models/` qua mount read-only.
+
+API nội bộ dùng mạng `backend`; monitoring bind `127.0.0.1:<MONITORING_HOST_PORT>` để service systemd gửi telemetry. Các service có `/healthz`, `/readyz`; readiness không chứng minh quyền gọi model/AWS thật. AWS/IAM được cấp bên ngoài project.
+
+Prompt nghiệp vụ, schema, tool loop, RAG và ngân sách memory đã có. Prompt reflection dài hạn và một số danh mục nghiệp vụ chờ nội dung; xem [agent core](agent_core.md). Fixture chỉ được dùng với `APP_ENV=local`; local Compose vẫn lấy secret qua Config.
+
+Xem [README](../README.md) cho sơ đồ luồng pháp luật và cấu trúc đầy đủ; [giao thức](container_interfaces.md), [environment](environment.md), [worker](workers.md), [EC2](ec2_setup_guide.md) cho triển khai.

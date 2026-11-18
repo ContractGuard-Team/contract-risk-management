@@ -8,6 +8,7 @@ extraction and OCR as the contract pipeline), so the MCP image needs no document
 """
 import base64
 import hashlib
+import json
 import os
 
 from common.exceptions import IntegrationNotConfigured
@@ -35,7 +36,7 @@ class PartnerDocuments:
             import boto3
             client = boto3.client("s3", region_name=os.getenv("AWS_REGION") or None)
         client.meta.events.register("before-call.s3", _refuse_writes)
-        self.client, self._processor, self.cache = client, processor, {}
+        self.client, self._processor, self.cache, self.requests = client, processor, {}, {}
 
     def processor(self):
         if self._processor is None:
@@ -46,11 +47,26 @@ class PartnerDocuments:
             self._processor = ServiceClient(url)
         return self._processor
 
+    def job_keys(self, job_id):
+        """The documents of this job, read from its own results/<job_id>/request.json in the partner bucket
+        (independent of anything the calling agent claims). Unknown job -> no document."""
+        if not isinstance(job_id, str) or not job_id.strip() or "/" in job_id or ".." in job_id:
+            return []
+        if job_id not in self.requests:
+            if len(self.requests) >= CACHE_SIZE:
+                self.requests.pop(next(iter(self.requests)))
+            try:
+                obj = self.client.get_object(Bucket=self.bucket, Key=f"results/{job_id}/request.json")
+                request = json.loads(obj["Body"].read(256 * 1024))
+            except Exception:  # missing/unreadable request.json: nothing is readable for this job
+                return []
+            self.requests[job_id] = [request.get(name) for name in ("source_file_key", "clean_file_key")
+                                     if isinstance(request.get(name), str)]
+        return self.requests[job_id]
+
     def _extract(self, key, data):
-        try:
-            return data.decode("utf-8"), {"extraction": "utf-8"}
-        except UnicodeDecodeError:
-            pass
+        if key.lower().endswith(".txt"):  # by type, not by decodability: an all-ASCII PDF decodes as UTF-8 too
+            return data.decode("utf-8", errors="replace"), {"extraction": "utf-8"}
         digest = hashlib.sha256(data).hexdigest()
         job_id = "partner-doc-" + digest[:32]  # same bytes -> same idempotent processing job (no second OCR)
         identity = {"job_id": job_id, "runtime_id": "mcp", "contract_id": job_id, "trace_id": digest[:32],

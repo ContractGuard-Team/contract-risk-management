@@ -125,7 +125,7 @@ cache trong vòng suy luận ở phiên bản này.
 | Tầng | Retry | Điều kiện |
 | --- | --- | --- |
 | SDK `openai` | 2 lần (max_retries=2), timeout 120 s | SDK tự xử lý 408/409/429/5xx/kết nối |
-| `OpenAIChatClient` | không retry, phân loại | RateLimit (trừ `insufficient_quota`), InternalServer 5xx, APIConnection/Timeout → `TransientModelError`; Authentication/BadRequest/hết quota giữ nguyên lỗi; `finish_reason` khác `stop` → `ModelResponseError` |
+| `OpenAIChatClient` | không retry, phân loại | RateLimit (trừ `insufficient_quota`), InternalServer 5xx, APIConnection/Timeout → `TransientModelError`; Authentication/BadRequest/hết quota giữ nguyên lỗi; Responses `status` khác `completed` hoặc không có text → `ModelResponseError` |
 | `ServiceClient` HTTP | 3 lần, 0.2–0.4s | 429/5xx/transport |
 | `JobStore.submit` | cho submit lại tối đa 3 attempt | error_type thuộc `RETRYABLE_JOB_ERRORS` (RemoteServiceError, TimeoutError, TransientModelError) |
 | Node LangGraph classify/evaluate/recommend | `AGENT_STAGE_RETRY`: 3 lần, backoff 5s→60s, jitter | `is_transient`: dịch vụ không phản hồi hoặc job agent lỗi tạm thời |

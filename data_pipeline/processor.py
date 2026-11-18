@@ -197,19 +197,28 @@ def process_document(ctx, document, version, files):
         store.update_version(version["id"], state="needs_review")
         return "needs_review", errors
     valid_from = document.get("effective_on") or document.get("issued_on") or today
-    for old in store.current_articles(document["id"]):  # new version replaces the old text entirely
-        store.close_article(old["id"], today)
-    ctx.qdrant.delete_document(document["symbol"])
-    for previous in store.select("legal_document_versions", {"document_id": document["id"], "state": "processed"}):
-        store.update_version(previous["id"], state="superseded")
     keep = document["status"] in ("replaced", "expired")
     status = document["status"] if keep else ("in_force" if valid_from <= today else "pending")
-    store.update_document(document["id"], status=status, current_version=version["version"])
     document = {**document, "status": status, "current_version": version["version"]}
-    rows = store.add_articles([{**{k: a.get(k) for k in ARTICLE_FIELDS}, "document_id": document["id"],
-                                "version": version["version"], "valid_from": valid_from, "is_current": True,
-                                "legal_references": legal_references(a["text"], document["symbol"])} for a in articles])
-    index(ctx, document, rows)
+    # The new version replaces the old text entirely, but only once it is stored AND indexed: until then the old
+    # articles and vectors stay current, so a failure never leaves the law without text.
+    previous = store.current_articles(document["id"])
+    rows = []
+    try:
+        rows = store.add_articles([{**{k: a.get(k) for k in ARTICLE_FIELDS}, "document_id": document["id"],
+                                    "version": version["version"], "valid_from": valid_from, "is_current": True,
+                                    "legal_references": legal_references(a["text"], document["symbol"])} for a in articles])
+        index(ctx, document, rows)
+    except Exception:
+        for row in rows:  # [valid_from, valid_from): never in force; the old text stays current until the retry
+            store.close_article(row["id"], row["valid_from"])
+        raise
+    for old in previous:
+        store.close_article(old["id"], today)
+    ctx.qdrant.drop_versions(document["symbol"], previous, keep=rows)  # points the new version did not overwrite
+    for done in store.select("legal_document_versions", {"document_id": document["id"], "state": "processed"}):
+        store.update_version(done["id"], state="superseded")
+    store.update_document(document["id"], status=status, current_version=version["version"])
     if document["doc_class"] == "constitution":
         _latest_constitution_wins(ctx, document)
     elif amendment:

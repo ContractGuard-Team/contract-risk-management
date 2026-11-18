@@ -362,6 +362,46 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(len(article4), 1)
         self.assertIn("2a. Khoản hai a.", article4[0]["text"])
 
+    def test_new_file_version_replaces_old_text_only_after_it_is_stored(self):
+        base = doc("1", "61/2020/QH14", "Luật Đầu tư", "Luật", "2021-01-01", BASE_LAW)
+        self.collect([base], "full")
+        base_id = self.store.document_by_symbol("61/2020/QH14")["id"]
+        before = {a["article_no"]: a["text"] for a in self.store.current_articles(base_id)}
+        changed = doc("1", "61/2020/QH14", "Luật Đầu tư", "Luật", "2021-01-01",
+                      BASE_LAW.replace("Luật này quy định về hoạt động đầu tư.", "Luật này quy định về đầu tư (bản mới)."))
+        with patch.object(self.ctx.qdrant, "upsert", side_effect=RuntimeError("Qdrant outage")), \
+                patch("data_pipeline.processor.log"):
+            self.collect([changed], "full")
+        self.assertEqual({a["article_no"]: a["text"] for a in self.store.current_articles(base_id)}, before)
+        self.assertTrue(self.points(symbol="61/2020/QH14", article_no="1", current=True))  # old vectors kept
+        source = FakeSource(dict([changed]))
+        self.ctx.fetch = lambda urls: [(safe_name(u), asyncio.run(source.download(u))) for u in urls]
+        self.assertEqual(process_pending(self.ctx), {"done": 1})
+        article1 = [a for a in self.store.current_articles(base_id) if a["article_no"] == "1"]
+        self.assertEqual(len(article1), 1)
+        self.assertIn("(bản mới)", article1[0]["text"])
+        current = self.points(symbol="61/2020/QH14", article_no="1", current=True)
+        self.assertTrue(current and all("(bản mới)" in p.payload["text"] for p in current))
+
+    def test_collector_keeps_only_a_few_documents_in_flight(self):
+        from data_pipeline import collector
+        docs = [doc(str(i), f"{i}/2020/QH14", f"Luật số {i}", "Luật", "2021-01-01", BASE_LAW.replace("61/2020", f"{i}/2020"))
+                for i in range(1, 11)]
+        source, active, peak = FakeSource(dict(docs)), [0], [0]
+        download = source.download
+
+        async def tracked(url):
+            active[0] += 1
+            peak[0] = max(peak[0], active[0])
+            await asyncio.sleep(0.01)
+            try:
+                return await download(url)
+            finally:
+                active[0] -= 1
+        source.download = tracked
+        asyncio.run(collect("full", source=source, store=self.store, archiver=self.archiver, today=self.today))
+        self.assertLessEqual(peak[0], collector.DOCUMENTS_IN_FLIGHT)
+
     def test_collector_consumes_sqs_and_deletes_only_after_success(self):
         sqs = boto3.client("sqs", region_name="ap-southeast-1")
         queue = sqs.create_queue(QueueName="contract-data-update-queue")["QueueUrl"]

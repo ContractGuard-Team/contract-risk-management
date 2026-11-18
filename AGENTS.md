@@ -284,5 +284,34 @@
 - Data pipeline (mục cuối `docs/data_pipeline_design.md`): collector bù job thiếu, retry kiểm hash, `apply_amendment` hoàn tác khi lỗi.
 - Extraction: không tính điểm verdict trích sai, trùng clause_id → lỗi, kẹp trang. Agent: kết quả tool rút ngắn giữ JSON, ngân sách kiểm lại trong vòng tool, handoff nén kèm `ids` (mục cuối `docs/agent_core.md`).
 - MCP: `partner_document` chỉ đọc key của job (header `x-job-context`), event MCP có job/trace id (mục cuối `docs/mcp.md`). Monitoring giữ `cache_read_tokens`, `reasoning_tokens`.
-- `configs/memory.yaml` VẪN TRỐNG có chủ đích: ngân sách phụ thuộc context window của model OpenAI người dùng chọn. 236/236 unit test; chưa build/chạy lại container cho đợt này.
+- (Đã điền ở mục 2026-11-18.) 236/236 unit test; chưa build/chạy lại container cho đợt này.
 
+## Chọn model + Responses API + sửa lỗi đợt 2 (2026-11-18, mới nhất)
+
+- Đọc mục cuối `docs/agent_core.md`. Model: Agent 1 `gpt-6-luna`, Agent 2/3 `gpt-6.1-sol` (config.yaml), key đã ở Secrets Manager. Provider chuyển sang OpenAI **Responses API** (Sol chỉ gọi tool qua Responses); mục "Chat Completions" ở trên là lịch sử. `configs/memory.yaml` đã điền (A1 300k, A2/A3 900k).
+- Data pipeline: phiên bản file mới chỉ thay bản cũ sau khi lưu + index xong (lỗi → bản cũ giữ nguyên, `delete_document` đã bỏ); collector tối đa 4 văn bản cùng lúc (`DOCUMENTS_IN_FLIGHT`); TXT thành 1 trang; trang PDF lỗi `KeyError` = trang trống.
+- MCP `partner_document`: TXT theo đuôi file (PDF ASCII vẫn qua input-processing); key được phép lấy từ `results/<job_id>/request.json` của chính job (không tin header); agent chỉ gửi identity.
+- Orchestration/Agent: kết quả cuối dựng trước khi cache `complete`; gộp chunk kiểm chunk_id + continuation; Agent 1 kiểm nguyên văn/quote/trang; context agent bỏ `preprocessing.extraction`; overlap chunk mặc định 0; input-processing báo lỗi nếu có ký tự không thuộc chunk nào.
+- Chưa làm: Agent 2/3 truy xuất bản đầy đủ khi handoff bị nén (mới có `ids`; với ngân sách 900k hiếm xảy ra); race ghi S3 khi lease hết giữa chừng (cần thử AWS thật). 247/247 unit test; chưa chạy container/OpenAI thật cho đợt này.
+
+## Dọn file rỗng và tài liệu triển khai (2026-11-18)
+
+- Đọc `docs/project_cleanup.md` để biết 28 placeholder đã bỏ và mục đích các file rỗng giữ lại. Không tạo lại YAML/script/schema/port rỗng; config thực tế là `.env`, `config/policy.json`, `configs/memory.yaml`, config từng agent.
+- Giữ package markers, prompt `long_term_reflection.md` và ba folder danh mục chờ đối tác; không tự điền prompt hoặc sửa source Hermes upstream khi cleanup.
+- README đã mô tả runtime hiện tại; hướng dẫn GitHub → EC2 → Docker + systemd ở `docs/ec2_setup_guide.md`. `docs/deployment_ec2.md` dẫn về đó. Báo cáo EC2/testing theo ngày là lịch sử.
+- Còn 8 notebook có nội dung: 4 notebook cũ và 3 agent + 1 tổng thể gọi unit test có sẵn. Chọn theo `tests/README.md`; notebook service dùng pyproject.toml để tìm root, không phụ thuộc plan_work.txt.
+- Kiểm tra cleanup: 217 Python AST, 8 notebook schema, 58 lượt test qua code cell của 4 notebook và Compose config đạt. Không chạy lại full suite, Docker build, cloud hay EC2 trong đợt này.
+
+## Tham số khởi chạy 3 model (2026-11-18, mới nhất)
+
+- `inference_config` đã điền: Agent 1 gpt-6-luna effort medium, 32.000 token ra; Agent 2 gpt-6.1-sol effort high, 128.000;
+  Agent 3 gpt-6.1-sol effort medium, 128.000. temperature/top_p để trống. Bảng + lý do + giá ở mục "Model + Responses API"
+  của `docs/agent_core.md`. `config_loader` từ chối effort/max_completion_tokens sai khi nạp.
+- Root `.env` local đã đổi `MODEL_PROVIDER=openai` (chạy model thật). Smoke/E2E container cần `MODEL_PROVIDER=fixture`.
+  248/248 unit test. Chưa gọi OpenAI thật.
+
+## Chuẩn bị .env cho EC2 (2026-11-18)
+
+- Root `.env` hiện là cấu hình EC2: `APP_ENV=production`, `MODEL_PROVIDER=openai`, `WORKER_ENABLED=true`, `IMAGE_TAG=ec2-20261118`; Langfuse và monitoring forwarding giữ bật. Khi deploy sẽ nhận job từ queue ContractGuard đã cấu hình; không dùng trực tiếp file này cho smoke local.
+- Giữ tám CONFIG_TOKEN hiện có; AWS key/endpoint giả lập để trống, dùng IAM role. API keys vẫn ở Secrets Manager. Model overrides để trống có chủ đích để dùng config.yaml đã chốt cho từng agent. `.env` ignored, phải chuyển riêng lên EC2, không đi theo Git clone.
+- Đã kiểm Compose 9 service, worker settings, model/inference config và token bootstrap bằng kiểm tra local; không gọi cloud, không build/restart/deploy trong đợt này.
