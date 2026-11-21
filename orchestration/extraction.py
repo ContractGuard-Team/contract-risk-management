@@ -159,17 +159,14 @@ def build_extraction(contract, results, *, job_id, trace, policy=None):
     document = {"file_type": FILE_TYPES.get(file_format, file_format or "unknown"),
                 # shortcut: TXT/DOCX have no physical pages (clauses are on page 1) until the partner defines it.
                 "page_count": max(1, document_info.get("page_count") or 1, max(c["page_end"] for c in clauses.values())),
-                "language": languages.pop() if len(languages) == 1 else "mixed",
-                "is_scanned": bool((preprocessing.get("extraction") or {}).get("ocr_segments"))}
+                "language": languages.pop() if len(languages) == 1 else "mixed"}
     request = context.get("request") or {}  # every field ContractGuard sent (absent for internal jobs)
     if request.get("clean_file_key"):
         document["clean_file_key"] = request["clean_file_key"]
     extraction = {
         "schema_version": "2.0.0", "job_id": job_id,
-        **({"tenant_id": request["tenant_id"]} if request.get("tenant_id") else {}),
         "contract_id": contract.contract_id, "contract_version": contract.contract_version,
         "document_complete": all(c["complete"] for c in clauses.values()), "document": document,
-        **({"output_language": request["output_language"]} if request.get("output_language") in ("vi", "en") else {}),
         "clauses": [{"clause_id": cid, "order": order, "number": c["number"], "heading": c["heading"], "text": c["text"],
                      "clause_type": c["clause_type"],
                      "location": {"page_start": c["page_start"], "page_end": c["page_end"], "regions": []}}

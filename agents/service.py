@@ -42,6 +42,9 @@ class FixtureProvider:
 def fixture_output(agent_id, request):
     """Schema-shaped fixture answer; Agent 1 echoes its chunk verbatim as one clause (audits check the handoff)."""
     from agents.shared.output import CHECK_CODES
+    if "question" in request:  # POST /v1/chat (agents/chat.py): cite the first clause, if any
+        clauses = request.get("clauses") or [{}]
+        return {"answer_text": "Fixture answer (no model).", "cited_clause_ids": [c for c in [clauses[0].get("clause_id")] if c]}
     workflow = (request.get("context") or {}).get("workflow") or {}
     if agent_id == "agent_1_classification" and workflow.get("chunk_id"):
         pages = [p for p in (workflow.get("source_metadata") or {}).get("pages") or [] if isinstance(p, int) and p > 0] or [1]
@@ -169,6 +172,19 @@ def create_app():
             raise HTTPException(409, "Agent configuration changed")
         runtime.ready()
         return {"messages": runtime.agent.build_messages(AgentRequest(**payload["request"]))}
+
+    @app.post("/v1/chat")
+    async def chat(request: Request):
+        """ContractGuard chatbot (agents/chat.py): one chat-request.v1 in, {answer_text, cited_clause_ids} out."""
+        from pydantic import ValidationError
+        from starlette.concurrency import run_in_threadpool
+        from agents.chat import answer
+        payload = await read_json(request)
+        runtime.ready()
+        try:
+            return await run_in_threadpool(answer, runtime.agent.provider, payload)
+        except ValidationError:
+            raise HTTPException(422, "Invalid chat request") from None
     return app
 
 
