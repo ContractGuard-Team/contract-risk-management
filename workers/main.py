@@ -70,6 +70,17 @@ def intake_process(settings, requests, responses, stop):
         workflow.close()
 
 
+def chat_process(settings, stop):
+    _initialize_child()
+    from common.service_client import ServiceClient
+    from workers.chat import ChatWorker
+    # The model answers within the backend's 3-minute wait; agent-3 holds the model key, not the worker.
+    agent = ServiceClient(settings.chat_url, token=settings.service_token, timeout=150)
+    ChatWorker(SQSClient(settings.chat_queue_url, region=settings.region),
+               SQSClient(settings.results_queue_url, region=settings.region),
+               S3Client(region=settings.region), settings.input_bucket, agent).serve(stop)
+
+
 def run(settings):
     settings.validate_connections()
     if not settings.langgraph_url:
@@ -81,7 +92,7 @@ def run(settings):
     from common.service_http import base_app
     context = multiprocessing.get_context("spawn")
     requests, responses = context.Queue(maxsize=2), context.Queue(maxsize=2)
-    intake_stop, progress_stop = context.Event(), context.Event()
+    intake_stop, progress_stop, chat_stop = context.Event(), context.Event(), context.Event()
     # A signal can interrupt Event.wait while its non-reentrant lock is held.
     # Calling Event.set in that handler can deadlock PID 1 during docker stop.
     # The handler only flips a local flag; normal code handles IPC and cleanup.
@@ -98,10 +109,14 @@ def run(settings):
                                args=(settings, requests, responses, progress_stop))
     intake = context.Process(target=intake_process, name="intake-worker",
                              args=(settings, requests, responses, intake_stop))
+    # ContractGuard chatbot: its own process, so a question never waits behind an analysis (workers/chat.py).
+    chat = (context.Process(target=chat_process, name="chat-worker", args=(settings, chat_stop))
+            if settings.chat_queue_url else None)
+    processes = [p for p in (progress, intake, chat) if p]
     children = []
     failed = False
     def readiness():
-        if len(children) != 2 or not all(p.is_alive() for p in children):
+        if len(children) != len(processes) or not all(p.is_alive() for p in children):
             raise RuntimeError("Worker child process unavailable")
         return {"mode": "sqs", "processes": [p.name for p in children]}
     app = base_app("worker", ready=readiness)
@@ -112,7 +127,7 @@ def run(settings):
     server = uvicorn.Server(uvicorn.Config(app, host="0.0.0.0", port=8000, access_log=False, log_config=None))
     server_thread = Thread(target=server.run, daemon=True)
     try:
-        for process in (progress, intake):
+        for process in processes:
             process.start()
             children.append(process)
         server_thread.start()
@@ -124,6 +139,7 @@ def run(settings):
     finally:
         server.should_exit = True
         intake_stop.set()
+        chat_stop.set()
         deadline = time.monotonic() + settings.shutdown_seconds
         if intake in children:
             while intake.is_alive() and time.monotonic() < deadline and progress.is_alive():
@@ -131,6 +147,11 @@ def run(settings):
             if intake.is_alive():
                 intake.terminate()
             intake.join()
+        if chat in children:  # its long poll returns within 20 s; an answer in flight is cut at the deadline
+            chat.join(timeout=max(0, deadline - time.monotonic()))
+            if chat.is_alive():
+                chat.terminate()
+            chat.join()
         # Keep the writer alive until intake finishes; stopping both together can lose the last ack.
         progress_stop.set()
         if progress in children:

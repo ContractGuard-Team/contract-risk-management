@@ -196,11 +196,14 @@ class ExtractionTests(unittest.TestCase):
         self.assertEqual(extraction["facts"]["payment_term_days"]["status"], "UNKNOWN")  # its quote is not in the text
         self.assertEqual(extraction["metadata"]["parties"], ["Công ty A"])
         self.assertEqual(extraction["document"], {"file_type": "pdf", "page_count": 3, "language": "vi",
-                                                  "is_scanned": False, "clean_file_key": f"clean/org/{CID}/v2/source.pdf"})
+                                                  "clean_file_key": f"clean/org/{CID}/v2/source.pdf"})
         # Correction moved C0003 to dispute_and_governing_law: no M01; M02 (no term clause) is missing.
         self.assertEqual(notes["scoring_detail"]["missing_section_rules"], ["M02"])
         self.assertEqual(extraction["scoring"]["overall_score"], 10)  # R10 confirmed (5) + M02 (5)
-        self.assertEqual((extraction["tenant_id"], extraction["output_language"], extraction["trace"]), ("org-1", "vi", TRACE))
+        self.assertEqual(extraction["trace"], TRACE)
+        # The partner already knows tenant and language from its request: the result does not repeat them.
+        self.assertNotIn("tenant_id", extraction)
+        self.assertNotIn("output_language", extraction)
 
     def test_verdict_with_a_quote_outside_its_clause_never_scores(self):
         risk = json.loads(self.results["agent_2_risk_scoring"]["text"])

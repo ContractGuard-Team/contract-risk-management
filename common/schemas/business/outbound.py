@@ -44,7 +44,17 @@ class Pong(Strict):
     job_id: NonEmpty
 
 
-OutboundMessage = TypeAdapter(Annotated[Union[Progress, Completed, Failed, Pong], Field(discriminator="event_type")])
+class ChatAnswered(Strict):
+    """The whole answer to a chat_requested (not streamed). cited_clause_ids come from the request's clauses only."""
+    message_version: Literal["1"] = "1"
+    event_type: Literal["chat_answered"] = "chat_answered"
+    job_id: NonEmpty
+    answer_text: str = Field(min_length=1, max_length=8000)
+    cited_clause_ids: list[NonEmpty]
+
+
+OutboundMessage = TypeAdapter(Annotated[Union[Progress, Completed, Failed, Pong, ChatAnswered],
+                                        Field(discriminator="event_type")])
 
 
 # --- result file (results/<job_id>/extraction.json) ------------------------------------------------------
@@ -68,7 +78,6 @@ class Document(Strict):
     page_count: int = Field(ge=1, le=100)
     clean_file_key: Optional[str] = Field(default=None, pattern=r"^clean/")
     language: Literal["vi", "en", "mixed"]
-    is_scanned: Optional[bool] = None
 
 
 class Clause(Strict):
@@ -137,28 +146,15 @@ class Trace(Strict):
     pipeline_version: Optional[str] = None
 
 
-class EmbeddingItem(Strict):
-    clause_id: str
-    vector: list[float] = Field(min_length=1024, max_length=1024)
-
-
-class Embeddings(Strict):
-    model: NonEmpty
-    dimensions: Literal[1024]
-    items: list[EmbeddingItem]
-
-
 class AnalysisResult(Strict):
     """results/<job_id>/extraction.json. The backend checks clause ids, quotes and pages against `clauses`
     and rejects the whole file on one mismatch, so orchestration/extraction.py verifies them first."""
     schema_version: Literal["2.0.0"] = "2.0.0"
     job_id: NonEmpty
-    tenant_id: Optional[NonEmpty] = None
     contract_id: NonEmpty
     contract_version: NonEmpty
     document_complete: bool
     document: Document
-    output_language: Optional[Literal["vi", "en"]] = None
     clauses: list[Clause] = Field(min_length=1)
     metadata: Optional[ContractMetadata] = None
     findings: list[Finding]
@@ -168,7 +164,6 @@ class AnalysisResult(Strict):
     overall_recommendation: Optional[str] = Field(default=None, max_length=4000)
     scoring: Optional[Scoring] = None
     trace: Trace
-    embeddings: Optional[Embeddings] = None
 
     @model_validator(mode="after")
     def _checks_once(self):
