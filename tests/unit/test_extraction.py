@@ -221,19 +221,29 @@ class ExtractionTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "two different clauses"):
             build_extraction(contract(), self.results, job_id=JOB, trace=TRACE)
 
-    def test_continuation_and_chunk_ids_are_checked(self):
+    def test_chunk_ids_are_checked(self):
+        chunks = self.results["agent_1_classification"]["chunks"]
+        first = json.loads(chunks[0]["result"]["text"])
+        chunks[0]["result"] = result("agent_1_classification", {**first, "chunk_id": "k9"})
+        with self.assertRaisesRegex(ValueError, "answered chunk k9"):
+            build_extraction(contract(), self.results, job_id=JOB, trace=TRACE)
+
+    def test_a_wrong_continuation_flag_does_not_fail_the_job(self):
         chunks = self.results["agent_1_classification"]["chunks"]
         first, second = (json.loads(c["result"]["text"]) for c in chunks)
-        for broken_first, broken_second, message in (
-                ({**first, "chunk_id": "k9"}, second, "answered chunk k9"),
+        for broken_first, broken_second, case in (
+                # Job 01a201b2 (2026-11-22): the first clause of the document said it continued something.
+                ({**first, "clauses": [{**first["clauses"][0], "continuation": True}, first["clauses"][1]]}, second,
+                 "nothing to continue"),
                 ({**first, "clauses": [first["clauses"][0], {**first["clauses"][1], "complete": True}]}, second,
-                 "does not follow a cut clause"),          # continues a clause that was not cut
-                (first, {**second, "clauses": second["clauses"][::-1]}, "does not follow a cut clause")):  # not first
-            with self.subTest(message=message):
+                 "continues a clause that was not cut"),
+                (first, {**second, "clauses": second["clauses"][::-1]}, "not the first clause of its chunk")):
+            with self.subTest(case=case):
                 chunks[0]["result"] = result("agent_1_classification", broken_first)
                 chunks[1]["result"] = result("agent_1_classification", broken_second)
-                with self.assertRaisesRegex(ValueError, message):
-                    build_extraction(contract(), self.results, job_id=JOB, trace=TRACE)
+                extraction, _ = build_extraction(contract(), self.results, job_id=JOB, trace=TRACE)
+                self.assertEqual([c["clause_id"][-5:] for c in extraction["clauses"]], ["C0001", "C0002", "C0003"])
+                self.assertIn("phạt 8%", extraction["clauses"][1]["text"])  # the continuation text is kept
 
     def test_clause_pages_stay_inside_their_chunk(self):
         chunks = self.results["agent_1_classification"]["chunks"]
