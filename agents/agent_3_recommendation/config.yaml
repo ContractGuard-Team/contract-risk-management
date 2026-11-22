@@ -5,9 +5,11 @@ model: gpt-6.1-sol
 # OpenAI Responses API options. max_completion_tokens -> max_output_tokens (reasoning tokens count toward it;
 # a cut-off answer fails the job), reasoning_effort -> reasoning.effort. temperature/top_p stay empty: OpenAI says to
 # omit them on its reasoning models. `stop` is not supported by the Responses API.
-# Agent 3 viết đề xuất/sửa điều khoản cho mọi finding: reasoning medium, output = trần model (128k).
+# Agent 3 viết đề xuất/sửa điều khoản cho mọi finding: reasoning medium, 32k output.
+# Không để trần model (128k): OpenAI tính max_output_tokens vào giới hạn TPM ngay khi nhận request, nên 128k
+# làm request bị 429 (TransientModelError) dù câu trả lời thật ngắn hơn nhiều (staging 2026-11-22).
 inference_config:
-  max_completion_tokens: 128000
+  max_completion_tokens: 32000
   reasoning_effort: medium
   temperature:
   top_p:

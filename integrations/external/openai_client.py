@@ -89,7 +89,8 @@ class OpenAIChatClient:
                 from openai import OpenAI
             except ImportError as exc:
                 raise ConfigurationError("Install project dependencies to use OpenAI (openai)") from exc
-            self._client = OpenAI(api_key=self.settings.api_key, timeout=120, max_retries=2)
+            # 5 retries: the SDK waits as a 429's Retry-After says, so a per-minute limit can pass (2 failed in ~2 s).
+            self._client = OpenAI(api_key=self.settings.api_key, timeout=120, max_retries=5)
         try:
             # store=False: nothing kept server-side; the transcript is resent each round (stateless agents).
             # shortcut: reasoning items are not passed back between tool rounds; send them if quality needs it.
@@ -97,7 +98,9 @@ class OpenAIChatClient:
                                                      store=False, **request)
         except Exception as exc:  # SDK errors propagate; never fabricate a successful result
             if transient(exc):
-                raise TransientModelError(f"OpenAI temporarily unavailable: {type(exc).__name__}") from exc
+                # Status and code only (e.g. 429 rate_limit_exceeded), never the request: enough to tell TPM from outage.
+                raise TransientModelError(f"OpenAI temporarily unavailable: {type(exc).__name__} "
+                                          f"status={getattr(exc, 'status_code', None)} code={getattr(exc, 'code', None)}") from exc
             raise
         usage = chat_usage(response.usage.model_dump(exclude_none=True) if response.usage is not None else {})
         if response.status != "completed":
