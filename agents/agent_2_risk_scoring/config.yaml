@@ -5,9 +5,11 @@ model: gpt-6.1-sol
 # OpenAI Responses API options. max_completion_tokens -> max_output_tokens (reasoning tokens count toward it;
 # a cut-off answer fails the job), reasoning_effort -> reasoning.effort. temperature/top_p stay empty: OpenAI says to
 # omit them on its reasoning models. `stop` is not supported by the Responses API.
-# Agent 2 chấm cả hợp đồng, phán quyết R01–R20 có bằng chứng: reasoning high, output = trần model (128k).
+# Agent 2 chấm cả hợp đồng, phán quyết R01–R20 có bằng chứng: reasoning high, 64k output.
+# Không để trần model (128k): OpenAI tính max_output_tokens vào giới hạn TPM ngay khi nhận request (xem Agent 3).
+# 64k chứ không 32k như Agent 1/3 vì reasoning high trên cả hợp đồng tốn token suy luận hơn.
 inference_config:
-  max_completion_tokens: 128000
+  max_completion_tokens: 64000
   reasoning_effort: high
   temperature:
   top_p:

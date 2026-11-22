@@ -10,6 +10,9 @@ import re
 from common.schemas.business.inbound import ChatRequest
 
 MAX_ANSWER = 8000  # chat_answered.answer_text maxLength
+# Not agent-3's analysis settings (32k, reasoning medium): an answer is at most 8000 characters and the backend
+# waits 3 minutes. A small max_output_tokens also keeps the request under the account's tokens-per-minute limit.
+INFERENCE = {"max_completion_tokens": 4000, "reasoning_effort": "low"}
 
 SYSTEM = {
     "vi": ("Bạn là trợ lý của ContractGuard, trả lời câu hỏi của người dùng về MỘT hợp đồng đã được phân tích. "
@@ -64,5 +67,5 @@ def parse_answer(text: str, clause_ids: set[str]) -> dict:
 
 def answer(provider, payload: dict) -> dict:
     request = ChatRequest.model_validate(payload)
-    result = provider.generate(build_messages(request))
+    result = provider.generate(build_messages(request), inference_config=INFERENCE)
     return parse_answer(result.text, {c.clause_id for c in request.clauses})

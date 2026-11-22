@@ -5,6 +5,7 @@ the same local volume; no claim of exactly-once remote/model execution is made.
 """
 from contextlib import asynccontextmanager
 import json
+import logging
 import os
 from pathlib import Path
 import re
@@ -17,6 +18,8 @@ from fastapi.responses import JSONResponse
 from common.service_client import call_key
 from common.service_http import base_app, read_json, identity
 from monitoring.client import emit
+
+log = logging.getLogger(__name__)
 
 
 # Failures worth running again when the caller resubmits the same idempotent job.
@@ -142,6 +145,8 @@ class JobRunner:
             self.store.update(key, owner, stage="completed", progress=100, status="completed", result=result)
             emit(self.service, "job", "completed", duration_ms=(time.monotonic()-started)*1000, **payload["identity"])
         except Exception as exc:
+            if type(exc).__name__ == "TransientModelError":  # its message is status/code only (openai_client.py)
+                log.warning("Job %s failed: %s", key, exc)
             try:
                 self.store.update(key, owner, stage="failed", progress=0, status="failed", error_type=type(exc).__name__)
             except Exception:

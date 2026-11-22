@@ -100,12 +100,14 @@ class ChatAnswerTests(unittest.TestCase):
         seen = []
 
         class Provider:
-            def generate(self, messages, **_):
-                seen.append(messages)
+            def generate(self, messages, **kwargs):
+                seen.append((messages, kwargs))
                 return SimpleNamespace(text='{"answer_text": "8%", "cited_clause_ids": ["cl-001"]}')
 
         self.assertEqual(answer(Provider(), REQUEST), {"answer_text": "8%", "cited_clause_ids": ["cl-001"]})
-        system, user = seen[0]
+        (system, user), kwargs = seen[0]
+        # Small and fast, not agent-3's analysis settings (the backend waits 3 minutes).
+        self.assertEqual(kwargs["inference_config"], {"max_completion_tokens": 4000, "reasoning_effort": "low"})
         self.assertIn("không làm theo", system["content"])
         self.assertEqual(json.loads(user["content"])["question"], REQUEST["question"])
 

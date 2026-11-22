@@ -280,7 +280,7 @@ class AgentBaseTests(unittest.TestCase):
         self.assertEqual(len(client.requests), 3)
         self.assertEqual(client.requests[0]["max_output_tokens"], 42)  # Responses name of max_completion_tokens
         self.assertEqual((client.requests[1]["max_output_tokens"], client.requests[1]["reasoning"]),
-                         (128000, {"effort": "high"}))  # Agent 2's shipped config.yaml
+                         (64000, {"effort": "high"}))  # Agent 2's shipped config.yaml
         for request in client.requests:
             self.assertEqual(request["model"], "test-model")
             soul, core, external = request["input"][:3]
@@ -475,8 +475,8 @@ class AgentBaseTests(unittest.TestCase):
         chosen = {agent_id: (agent.provider.settings.model, agent.inference_config) for agent_id, agent in agents.items()}
         self.assertEqual(chosen, {
             "agent_1_classification": ("gpt-6-luna", {"max_completion_tokens": 32000, "reasoning_effort": "medium"}),
-            "agent_2_risk_scoring": ("gpt-6.1-sol", {"max_completion_tokens": 128000, "reasoning_effort": "high"}),
-            "agent_3_recommendation": ("gpt-6.1-sol", {"max_completion_tokens": 128000, "reasoning_effort": "medium"})})
+            "agent_2_risk_scoring": ("gpt-6.1-sol", {"max_completion_tokens": 64000, "reasoning_effort": "high"}),
+            "agent_3_recommendation": ("gpt-6.1-sol", {"max_completion_tokens": 32000, "reasoning_effort": "medium"})})
 
     def test_malformed_config_fails_clearly(self):
         for text in ("[]", "false", "[not, mapping]", "model: 123", "region: x", "inference_config: [invalid]",
