@@ -19,7 +19,7 @@ ROOT = Path(__file__).resolve().parents[2]
 POLICY = json.loads((ROOT / "config/policy.json").read_text(encoding="utf-8"))
 SECRET = {key: f"value-of-{key.lower()}-" + "x" * 32 for key in API_KEYS}
 TOKENS = {name: name[0] * 40 + name for name in POLICY if name != "config"}
-CLEAN = {key: "" for key in (*API_KEYS, "OPENAI_MODEL")}
+CLEAN = {key: "" for key in (*API_KEYS, "GEMINI_MODEL")}
 
 
 class SecretsConfigTests(unittest.TestCase):
@@ -42,7 +42,7 @@ class SecretsConfigTests(unittest.TestCase):
         for name, service in services.items():
             with self.subTest(service=name):
                 self.assertEqual(json.loads(service["environment"]["CONFIG_SECRET_BINDINGS"]), list(POLICY[name]))
-        self.assertEqual(set(POLICY["agent-1"]), {"INTERNAL_API_TOKEN", "OPENAI_API_KEY"})
+        self.assertEqual(set(POLICY["agent-1"]), {"INTERNAL_API_TOKEN"})  # Gemini key: not in Secrets Manager (test)
         self.assertNotIn("SUPABASE_SECRET_KEY", POLICY["agent-2"])  # agents reach data only through mcp
 
     def test_each_principal_gets_only_its_keys_one_aws_call(self):
@@ -68,9 +68,9 @@ class SecretsConfigTests(unittest.TestCase):
     def test_services_fill_empty_keys_from_secrets_manager_and_keep_env_values(self):
         got = self.bootstrap_via_http("agent-2", {})
         self.assertEqual({k: v for k, v in got.items() if v}, {k: SECRET[k] for k in POLICY["agent-2"]})
-        local = "local-openai-key-from-dotenv-" + "y" * 10
-        got = self.bootstrap_via_http("agent-1", {"OPENAI_API_KEY": local})
-        self.assertEqual(got["OPENAI_API_KEY"], local)  # a value in .env wins, never overwritten
+        local = "local-mcp-token-from-dotenv-" + "y" * 10
+        got = self.bootstrap_via_http("agent-3", {"MCP_API_TOKEN": local})
+        self.assertEqual(got["MCP_API_TOKEN"], local)  # a value in .env wins, never overwritten
         self.assertEqual(got["INTERNAL_API_TOKEN"], SECRET["INTERNAL_API_TOKEN"])
 
     def test_without_secret_id_services_run_on_dotenv_values(self):
@@ -96,7 +96,7 @@ class SecretsConfigTests(unittest.TestCase):
                 self.assertEqual(os.environ["QDRANT_URL"], "https://from-dotenv")
                 self.assertEqual(os.environ["QDRANT_API_KEY"], SECRET["QDRANT_API_KEY"])
                 self.assertEqual(os.environ["SUPABASE_SECRET_KEY"], SECRET["SUPABASE_SECRET_KEY"])
-                self.assertEqual(os.environ.get("OPENAI_API_KEY"), "")  # pipeline takes only its own keys
+                self.assertEqual(os.environ.get("TAVILY_API_KEY"), "")  # pipeline takes only its own keys
 
 
 if __name__ == "__main__":

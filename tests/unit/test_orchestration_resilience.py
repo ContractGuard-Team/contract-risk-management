@@ -5,15 +5,14 @@ import unittest
 from unittest.mock import patch
 
 import httpx
-import openai
 from langgraph.types import RetryPolicy
 
-from common.exceptions import TransientModelError
+from common.exceptions import ModelResponseError, TransientModelError
 from common.schemas.agent_messages import ModelResult
 from common.service_client import RemoteServiceError
 from common.service_jobs import JobStore
-from common.settings import OpenAISettings
-from integrations.external.openai_client import OpenAIChatClient
+from common.settings import GeminiSettings
+from integrations.external.gemini_client import MAX_RETRIES, GeminiChatClient
 from orchestration import workflow
 from orchestration.cache import ContractCache
 from orchestration.checkpoint import resume_chunk
@@ -82,28 +81,34 @@ class RetryAndResumeTests(unittest.TestCase):
         self.assertFalse(is_transient(RemoteServiceError("Remote job failed: ValueError")))
         self.assertFalse(is_transient(TimeoutError("Internal job exceeded deadline")))
 
-    def test_openai_rate_limit_and_outage_become_transient(self):
-        request = httpx.Request("POST", "https://api.openai.com/v1/responses")
+    def test_gemini_rate_limit_and_outage_become_transient(self):
+        request = httpx.Request("POST", "https://generativelanguage.googleapis.com/v1beta/models/m:generateContent")
 
-        def status(cls, code, error_code):
-            return cls("x", response=httpx.Response(code, request=request), body={"code": error_code})
-
-        def client(error):
-            def create(**_):
-                raise error
-            stub = type("Stub", (), {})()
-            stub.responses = type("Responses", (), {"create": staticmethod(create)})()
-            return OpenAIChatClient(OpenAISettings("m", "sk-test"), client=stub)
-        for error in (status(openai.RateLimitError, 429, "rate_limit_exceeded"),
-                      status(openai.InternalServerError, 503, None), openai.APITimeoutError(request=request),
-                      openai.APIConnectionError(request=request)):
-            with self.subTest(error=type(error).__name__), self.assertRaises(TransientModelError):
-                client(error).generate([])
-        for error in (status(openai.RateLimitError, 429, "insufficient_quota"),  # billing: retry cannot help
-                      status(openai.AuthenticationError, 401, "invalid_api_key"),
-                      status(openai.BadRequestError, 400, None)):
-            with self.subTest(error=error.code or type(error).__name__), self.assertRaises(type(error)):
-                client(error).generate([])
+        def client(outcome):
+            stub, waits = type("Stub", (), {})(), []
+            def post(*_, **__):
+                stub.calls += 1
+                if isinstance(outcome, Exception):
+                    raise outcome
+                return httpx.Response(outcome[0], json=outcome[1], request=request)
+            stub.calls, stub.post = 0, post
+            return GeminiChatClient(GeminiSettings("m", "test-key"), client=stub, sleep=waits.append), stub, waits
+        limited = {"error": {"status": "RESOURCE_EXHAUSTED", "details": [{"retryDelay": "7s"}]}}
+        for outcome in ((429, limited), (503, {"error": {"status": "UNAVAILABLE"}}), (500, {}),
+                        httpx.ReadTimeout("x", request=request), httpx.ConnectError("x", request=request)):
+            gemini, stub, waits = client(outcome)
+            with self.subTest(outcome=outcome), self.assertRaises(TransientModelError):
+                gemini.generate([])
+            self.assertEqual(stub.calls, MAX_RETRIES + 1)  # retried before giving up
+        gemini, _, waits = client((429, limited))
+        with self.assertRaises(TransientModelError):
+            gemini.generate([])
+        self.assertEqual(waits, [7.0] * MAX_RETRIES)  # the server's retryDelay is honoured
+        for code, status in ((400, "INVALID_ARGUMENT"), (401, "UNAUTHENTICATED"), (403, "PERMISSION_DENIED")):
+            gemini, stub, _ = client((code, {"error": {"status": status}}))
+            with self.subTest(code=code), self.assertRaisesRegex(ModelResponseError, status):
+                gemini.generate([])
+            self.assertEqual(stub.calls, 1)  # permanent: no retry
 
     def test_job_store_requeues_transient_model_failure(self):
         with TemporaryDirectory() as directory:

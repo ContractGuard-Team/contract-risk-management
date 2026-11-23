@@ -315,3 +315,17 @@
 - Root `.env` hiện là cấu hình EC2: `APP_ENV=production`, `MODEL_PROVIDER=openai`, `WORKER_ENABLED=true`, `IMAGE_TAG=ec2-20261118`; Langfuse và monitoring forwarding giữ bật. Khi deploy sẽ nhận job từ queue ContractGuard đã cấu hình; không dùng trực tiếp file này cho smoke local.
 - Giữ tám CONFIG_TOKEN hiện có; AWS key/endpoint giả lập để trống, dùng IAM role. API keys vẫn ở Secrets Manager. Model overrides để trống có chủ đích để dùng config.yaml đã chốt cho từng agent. `.env` ignored, phải chuyển riêng lên EC2, không đi theo Git clone.
 - Đã kiểm Compose 9 service, worker settings, model/inference config và token bootstrap bằng kiểm tra local; không gọi cloud, không build/restart/deploy trong đợt này.
+
+## Model 3 agent = Gemini + prompt song ngữ (2026-11-23, mới nhất)
+
+- Đọc mục cuối `docs/agent_core.md`. Ba agent dùng `gemini-3.5-flash-lite` qua `integrations/external/gemini_client.py`
+  (REST httpx, giữ `thoughtSignature` qua vòng tool); `openai_client.py` đã xoá. Mọi mục trước nói OpenAI/Responses API
+  /gpt-6-luna/gpt-6.1-sol/`OPENAI_API_KEY` nay là lịch sử. `MODEL_PROVIDER=gemini|fixture`, env `GEMINI_MODEL`,
+  `GEMINI_API_KEY`, `AGENT_n_MODEL`.
+- Key Gemini CHỈ từ biến môi trường `GEMINI_API_KEY` (root `.env`, gitignored; Compose truyền vào agent), không qua
+  Secrets Manager. Không ghi key vào code/file tracked: GitHub Push Protection đã chặn commit có key (2026-11-23), commit
+  chưa push đã được sửa lại. Đã gỡ `OPENAI_API_KEY` khỏi policy/compose/config client/setup.sh.
+- Prompt song ngữ VI/EN từ `ContractGuard_master_prompt.zip` đã áp vào soul/core/external 3 agent (chỉ thêm khối quy tắc,
+  sửa 1 câu rationale Agent 2); `tests/unit/test_bilingual_prompts.py`.
+- 261/261 unit test (venv Python 3.13 cài từ lock). Gọi Gemini thật: text + 4 mức thinking + vòng tool 2 lượt đạt.
+  Chưa build lại image, chưa chạy E2E container/hợp đồng thật với Gemini. Dependency `openai` vẫn trong lock (không còn dùng).

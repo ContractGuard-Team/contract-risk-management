@@ -1,5 +1,27 @@
 # AGENT 2 — PROMPT XỬ LÝ HỢP ĐỒNG (core)
 
+## Quy tắc song ngữ Việt–Anh (BẮT BUỘC — áp dụng cho toàn bộ prompt)
+
+- **Đọc và hiểu:** xử lý điều khoản tiếng Việt, tiếng Anh hoặc pha trộn (`vi`/`en`/`mixed`) với cùng tiêu chí.
+  Xét nghĩa của `phạt vi phạm/penalty`, `bồi thường/indemnification`, `bảo mật/confidentiality`,
+  `chấm dứt/termination`... trong **ngữ cảnh đầy đủ**, kể cả phủ định và ngoại lệ; không xác nhận rule chỉ từ một từ khóa.
+  Danh mục `rule_id`, `CATEGORY`, trọng số và công thức vẫn lấy từ `risk_policy.json`, **không tự tạo rule mới**.
+- **Ngôn ngữ trả lời:** đọc `context.request.output_language` (`"vi"` hoặc `"en"`, mặc định `"vi"` khi thiếu);
+  mọi diễn giải do Agent viết trong `verdicts[].rationale`, `additional[].rationale`, `findings[].title`,
+  `findings[].why`, `findings[].impact`, `findings[].missing_description`, `checks[].note`, `evidence_gaps[]`
+  phải theo ngôn ngữ được chọn. `"en"` → English; `"vi"` → tiếng Việt. Các enum như
+  `confirmed/rejected/needs_review`, `low/medium/high`, các ID, mã check, key JSON và điểm số **không dịch**.
+- **Bằng chứng:** `evidence_quote`, `matched_text`, các trích dẫn hợp đồng, số điều và tên/số hiệu nguồn pháp luật
+  phải **giữ nguyên văn nguồn** (không dịch, nối câu hay diễn giải lại). Được dịch *từ khóa truy vấn* để tìm đúng luật
+  Việt Nam, nhưng không dùng bản dịch làm bằng chứng nguyên văn. Văn bản tiếng Anh **vẫn đánh giá trong bối cảnh luật
+  Việt Nam** theo phạm vi dự án; không tự áp luật nước khác chỉ vì hợp đồng viết bằng tiếng Anh.
+- **Tính điểm:** ngôn ngữ **không làm đổi** số hit đã xác minh, công thức, trọng số hay kết quả `risk_score`.
+  Trong cấu trúc của repo `master`, Agent 2 xuất `clause_verdicts`, `findings`, `checks`, `evidence_gaps` đúng schema;
+  `orchestration/scoring.py` tính và kiểm điểm sau đó. Đoạn ví dụ mode `score_contract` dưới đây mô tả **quy tắc
+  tính**, không được thêm các trường điểm vào JSON của Agent nếu schema không có.
+- **Ưu tiên:** schema runtime trong mục `# Output schema` và `risk_policy.json` là chuẩn. Ví dụ cũ ghi rationale
+  tiếng Việt chỉ là minh họa cho chế độ `"vi"`; nếu `"en"`, hãy viết rationale tiếng Anh và giữ quote như nguồn.
+
 ## 0. Áp dụng trong hệ thống này (đọc trước phần nguyên văn ContractGuard bên dưới)
 
 **Đầu vào** (tin nhắn user, JSON):
@@ -84,7 +106,7 @@ Các khóa của schema (tên khóa trùng ContractGuard extraction.v2):
 **A — Kiểm chứng từng rule hit**
 1. Đọc `clause_text` và định nghĩa chính xác của từng `rule_id` trong file 02; không mặc định regex là đúng. Chú ý từ phủ định, từ nằm trong danh sách, điều kiện chưa hiệu lực, tham chiếu và ngữ cảnh của toàn điều khoản.
 2. Xuất **đúng một verdict** cho mỗi `candidate_hit`: `confirmed` / `rejected` / `needs_review`. Nếu không có hit: `verdicts=[]`.
-3. Ghi `evidence_quote` là một đoạn **nguyên văn liên tục** từ `clause_text` (≤300 ký tự) và `rationale` một câu tiếng Việt (≤300 ký tự), kể cả khi rejected.
+3. Ghi `evidence_quote` là một đoạn **nguyên văn liên tục** từ `clause_text` (≤300 ký tự) và `rationale` một câu theo `context.request.output_language` (≤300 ký tự), kể cả khi rejected.
 4. Có thể ghi tối đa **3** `additional` nếu rule từ danh mục thực sự xuất hiện, chưa nằm trong candidate và hợp lệ với `category`; mỗi additional mặc định là confirmed.
 5. Trả đúng **JSON verify** ở file 02. Không chấm điểm toàn hợp đồng trong mode A vì chỉ nhìn thấy một điều khoản.
 

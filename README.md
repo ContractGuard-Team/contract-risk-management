@@ -47,7 +47,7 @@ LangGraph chuyển context giữa các agent; các container agent không import
 | Monitoring | Sự kiện HTTP, log JSON, SQLite/outbox, metrics/alerts; chuyển tiến độ cho worker; Langfuse OTLP tùy chọn |
 | Config | Cấp secret theo token và allowlist của từng service từ AWS Secrets Manager |
 
-Model provider dùng **OpenAI Responses API**. Mặc định trong `config.yaml`: Agent 1 `gpt-6-luna`, Agent 2/3 `gpt-6.1-sol`; ghi đè bằng `AGENT_1_MODEL`, `AGENT_2_MODEL`, `AGENT_3_MODEL` hoặc `OPENAI_MODEL`. Đây là cấu hình repository; quyền truy cập model cần kiểm tra bằng tài khoản triển khai.
+Model provider (thử nghiệm từ 2026-11-23) dùng **Gemini API** `generateContent` qua REST (`integrations/external/gemini_client.py`). Mặc định trong `config.yaml`: cả 3 agent `gemini-3.5-flash-lite`; ghi đè bằng `AGENT_1_MODEL`, `AGENT_2_MODEL`, `AGENT_3_MODEL` hoặc `GEMINI_MODEL`. Key chỉ lấy từ `GEMINI_API_KEY` trong root `.env` (gitignored), không qua Secrets Manager và không ghi trong code. Ba agent xử lý hợp đồng tiếng Việt, tiếng Anh hoặc song ngữ; lời giải thích theo `request.output_language` (`vi`/`en`), trích dẫn giữ nguyên văn. Đây là cấu hình repository; quyền truy cập model cần kiểm tra bằng tài khoản triển khai.
 
 ## Luồng dữ liệu pháp luật
 
@@ -89,7 +89,7 @@ contract-risk-management/
 ├── configs/memory.yaml          # Ngân sách context/tóm tắt từng agent
 ├── data_pipeline/               # Collector, processor, ingestion, migrations SQL
 ├── input_processing/            # Validation, extraction/OCR, chunking, HTTP service
-├── integrations/                # OpenAI, MCP client, embedding, PostgreSQL
+├── integrations/                # Gemini, MCP client, embedding, PostgreSQL
 ├── mcp_server/                  # Tool gateway và các reader dịch vụ
 ├── monitoring/                  # Collector, tracing, metrics, alerts, Langfuse exporter
 ├── orchestration/               # LangGraph, handoff, cache, retry, scoring, output builder

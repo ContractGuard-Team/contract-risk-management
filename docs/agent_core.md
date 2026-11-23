@@ -65,7 +65,7 @@ kết quả trả ContractGuard):
 - Tool đưa cho model = các tool MCP đã bind (`bind_mcp_tools`); spec (tên, mô tả, JSON schema tham số) lấy từ
   `list_tools` của MCP gateway ở lần gọi model đầu tiên (`ToolRegistry.spec_loader`), alias đổi tên (`legal_reference`).
   Agent 1 không có tool → gọi model một lần như cũ (không gửi tham số `tools`).
-- OpenAI Responses API function calling (output item `function_call`) → chạy từng tool (`run_tool`, span `tool.*`) →
+- Function calling của model (Gemini `functionCall`, xem mục cuối) → chạy từng tool (`run_tool`, span `tool.*`) →
   thêm message `tool` → gọi lại. Tối đa `MAX_TOOL_ROUNDS=6` vòng mỗi lượt đánh giá; hết thì gọi với `tool_choice="none"`.
   Lỗi tool (chưa cấu hình, sai tham số, upstream lỗi) trả về cho model dưới dạng `{"error", "message"}`, không làm hỏng job.
   Kết quả tool cắt ở 20.000 ký tự (dùng `offset` của tool để đọc tiếp).
@@ -161,3 +161,36 @@ EC2 cần chuyển sang kho dùng chung.
 - Kiểm thêm: Agent 1 `check_output` buộc `clause.text` là nguyên văn của chunk, quote fact nằm trong điều khoản,
   `value_text` nằm trong quote, trang trong trang của chunk. Context gửi agent bỏ `preprocessing.extraction`
   (danh sách segment từng trang). Kết quả cuối được dựng + kiểm TRƯỚC khi cache `complete` (`run_contract(finalize=)`).
+
+## Model = Gemini (thử nghiệm) + prompt song ngữ (2026-11-23, mới nhất)
+
+Mục này thay mục "Model + Responses API" ở trên (giữ làm lịch sử). Tham số ngân sách memory không đổi.
+
+- Provider: `integrations/external/gemini_client.py:GeminiChatClient`, gọi REST `v1beta/models/<model>:generateContent`
+  bằng httpx (không thêm SDK), header `x-goog-api-key`. Đã xoá `openai_client.py`; `MODEL_PROVIDER=gemini|fixture`
+  (mặc định gemini). Message chat giữ nguyên trong agent; client đổi: system → `systemInstruction`, assistant → `model`,
+  `tool_calls` → `functionCall`, message `tool` → `functionResponse` (ghép theo tên, các kết quả liên tiếp chung 1 lượt),
+  tool spec → `functionDeclarations[].parametersJsonSchema` (JSON Schema đầy đủ của MCP), `tool_choice` → `toolConfig`.
+- Gemini 3 bắt buộc gửi lại `thoughtSignature` của mỗi `functionCall` ở vòng sau: client trả nó trong tool call
+  (`thought_signature`), `agents/base.py` giữ trong transcript. Đã kiểm thật: vòng tool 2 lượt với key thật đạt.
+- `inference_config` giữ tên trung lập: `max_completion_tokens` → `maxOutputTokens` (tính cả token thinking),
+  `reasoning_effort` → `thinkingConfig.thinkingLevel` (chỉ nhận `minimal|low|medium|high`), `stop` → `stopSequences`.
+  Usage trả tên cũ: `prompt_tokens`, `completion_tokens` = candidates + thoughts, `*_details.reasoning_tokens`/`cached_tokens`.
+- Lỗi: 429/5xx/lỗi mạng retry tối đa 5 lần (theo `retryDelay` của server, trần 60 s) rồi `TransientModelError`;
+  400/401/403 → `ModelResponseError` (không retry). `finishReason` khác `STOP` (MAX_TOKENS, SAFETY,
+  MALFORMED_FUNCTION_CALL...) hoặc `promptFeedback.blockReason` → `ModelResponseError`.
+- Model: cả 3 agent `gemini-3.5-flash-lite` (đã đọc từ API: 1.048.576 token vào, 65.536 token ra, có thinking).
+
+  | Agent | reasoning_effort (thinkingLevel) | max_completion_tokens |
+  | --- | --- | --- |
+  | 1 | medium | 32.000 |
+  | 2 | high | 64.000 |
+  | 3 | medium | 32.000 |
+
+- Key: chỉ từ biến môi trường `GEMINI_API_KEY` (root `.env`, gitignored; compose truyền vào agent-1/2/3), KHÔNG qua AWS
+  Secrets Manager và không ghi trong code. Thiếu key → readiness `TODO: configure Gemini GEMINI_API_KEY`. Đã bỏ
+  `OPENAI_API_KEY` khỏi `config/policy.json`, `CONFIG_SECRET_BINDINGS` của agent-1/2/3, `config/client.py:API_KEYS` và `setup.sh`.
+- Prompt song ngữ Việt–Anh (từ `ContractGuard_master_prompt.zip`): khối "Quy tắc song ngữ Việt–Anh" đầu `core.md` của
+  3 agent, một dòng trong `soul.md`, mục tra cứu song ngữ trong `external.md` của Agent 2/3; Agent 2 `rationale` theo
+  `context.request.output_language`. Trích dẫn/ID/enum giữ nguyên văn; `proposed_text` của Agent 3 theo ngôn ngữ điều
+  khoản gốc. Test tĩnh: `tests/unit/test_bilingual_prompts.py`. Chưa chạy E2E với hợp đồng tiếng Anh thật.

@@ -14,20 +14,20 @@ from agents.agent_2_risk_scoring.context.evidence_manager import EvidenceManager
 from agents.agent_3_recommendation.context.recommendation_memory import RecommendationMemory
 from common.exceptions import ConfigurationError, IntegrationNotConfigured, ModelResponseError
 from common.schemas.agent_messages import AgentRequest, ModelResult
-from common.settings import OpenAISettings
+from common.settings import GeminiSettings
 from agents.hermes.agent_factory import create_agent, create_agents
 from agents.hermes.config_loader import load_agent_config
 from agents.memory.short_term import memory_context
 from agents.hermes.tool_registry import ToolRegistry
 from agents.agent_3_recommendation.schemas.output import RecommendationResult
-from integrations.external.openai_client import OpenAIChatClient
+from integrations.external.gemini_client import GeminiChatClient
 from orchestration.pipeline import ContractRiskPipeline
 from orchestration.cache import ContractCache
 from agents.hermes.context_budget import MemoryPolicy
 from monitoring.observer import NullObserver
 
 
-SETTINGS = OpenAISettings("test-model", "sk-test")
+SETTINGS = GeminiSettings("test-model", "test-key")
 
 
 def test_pipeline(agents):
@@ -35,35 +35,47 @@ def test_pipeline(agents):
         policies={key: MemoryPolicy(100000, 1000) for key in agents})
 
 
-class FakeUsage:
-    def __init__(self, data):
-        self.data = data
+class FakeResponse:
+    """Shape of an httpx response used by GeminiChatClient."""
+    def __init__(self, data, status_code=200):
+        self.data, self.status_code = data, status_code
 
-    def model_dump(self, exclude_none=True):
-        return dict(self.data)
+    def json(self):
+        return deepcopy(self.data)
 
 
-def completion(text="model result", status="completed", reason=None):
-    """Shape of an openai Responses `Response` used by OpenAIChatClient."""
-    return SimpleNamespace(status=status, incomplete_details=SimpleNamespace(reason=reason),
-                           output=[SimpleNamespace(type="message", content=[SimpleNamespace(type="output_text", text=text)])],
-                           usage=FakeUsage({"input_tokens": 2, "output_tokens": 3}))
+def completion(text="model result", reason="STOP"):
+    """Gemini generateContent response with one text answer."""
+    return FakeResponse({"candidates": [{"content": {"role": "model", "parts": [{"text": text}]}, "finishReason": reason}],
+                         "usageMetadata": {"promptTokenCount": 2, "candidatesTokenCount": 3}})
 
 
 class FakeClient:
-    """Stands in for openai.OpenAI(): client.responses.create(**kwargs)."""
+    """Stands in for httpx.Client(): client.post(url, headers=..., json=body)."""
     def __init__(self, response=None):
-        self.requests = []
+        self.requests, self.urls, self.headers = [], [], []
         self.response = response
-        self.responses = SimpleNamespace(create=self.create)
 
-    def create(self, **kwargs):
-        self.requests.append(deepcopy(kwargs))
+    def post(self, url, headers=None, json=None):
+        self.urls.append(url)
+        self.headers.append(headers)
+        self.requests.append(deepcopy(json))
         return self.response if self.response is not None else completion()
 
 
 def first_user(request):
-    return json.loads(next(m["content"] for m in request["input"] if m.get("role") == "user"))
+    return json.loads(next(part["text"] for content in request["contents"] if content["role"] == "user"
+                           for part in content["parts"] if "text" in part))
+
+
+def last_text(request):
+    content = request["contents"][-1]
+    return content["role"], content["parts"][0]["text"]
+
+
+def tool_result(request):
+    """functionResponse of the last turn, as JSON text."""
+    return json.dumps(request["contents"][-1]["parts"][0]["functionResponse"], ensure_ascii=False)
 
 
 class FakeProvider:
@@ -95,10 +107,11 @@ def configured_agents(provider):
 
 
 def tool_completion(*calls):
-    """Response asking for tools: calls = (call_id, name, arguments JSON)."""
-    return SimpleNamespace(status="completed", incomplete_details=None,
-                           output=[SimpleNamespace(type="function_call", call_id=i, name=n, arguments=a) for i, n, a in calls],
-                           usage=FakeUsage({"input_tokens": 5, "output_tokens": 1}))
+    """Response asking for tools: calls = (thought signature, name, arguments JSON)."""
+    parts = [{"functionCall": {"name": n, "args": json.loads(a)}, **({"thoughtSignature": s} if s else {})}
+             for s, n, a in calls]
+    return FakeResponse({"candidates": [{"content": {"role": "model", "parts": parts}, "finishReason": "STOP"}],
+                         "usageMetadata": {"promptTokenCount": 5, "candidatesTokenCount": 1}})
 
 
 class ScriptedClient(FakeClient):
@@ -106,8 +119,8 @@ class ScriptedClient(FakeClient):
         super().__init__()
         self.queue = list(responses)
 
-    def create(self, **kwargs):
-        self.requests.append(deepcopy(kwargs))
+    def post(self, url, headers=None, json=None):
+        self.requests.append(deepcopy(json))
         return self.queue.pop(0)
 
 
@@ -122,18 +135,18 @@ class ToolLoopTests(unittest.TestCase):
         searched = []
         client = ScriptedClient([tool_completion(("c1", "legal_search", '{"query": "phạt vi phạm"}')),
                                  completion('{"verdict": "confirmed", "evidence_gaps": []}')])
-        with configured_agents(OpenAIChatClient(SETTINGS, client)) as agents:
+        with configured_agents(GeminiChatClient(SETTINGS, client)) as agents:
             agent = agents["agent_2_risk_scoring"]
             bind_tool(agent, "legal_search", lambda p: searched.append(p) or {"evidence": [{"citation": "Điều 418"}]})
             result = agent.run(AgentRequest("contract"))
         self.assertEqual(searched, [{"query": "phạt vi phạm"}])
-        self.assertEqual(client.requests[0]["tools"][0]["name"], "legal_search")  # Responses flat function tool
-        self.assertFalse(client.requests[0]["store"])
-        tool_output = client.requests[1]["input"][-1]
-        self.assertEqual((tool_output["type"], tool_output["call_id"]), ("function_call_output", "c1"))
-        self.assertIn("Điều 418", tool_output["output"])
-        self.assertEqual((client.requests[1]["input"][-2]["type"], client.requests[1]["input"][-2]["name"]),
-                         ("function_call", "legal_search"))
+        self.assertEqual(client.requests[0]["tools"][0]["functionDeclarations"][0]["name"], "legal_search")
+        # Gemini 3 needs the call sent back with its thought signature, then the result in the next user turn.
+        self.assertEqual(client.requests[1]["contents"][-2], {"role": "model", "parts": [
+            {"functionCall": {"name": "legal_search", "args": {"query": "phạt vi phạm"}}, "thoughtSignature": "c1"}]})
+        tool_output = client.requests[1]["contents"][-1]["parts"][0]["functionResponse"]
+        self.assertEqual(tool_output["name"], "legal_search")
+        self.assertIn("Điều 418", tool_result(client.requests[1]))
         self.assertEqual(json.loads(result.text)["verdict"], "confirmed")
         self.assertEqual(result.usage["prompt_tokens"], 7)  # both model calls billed
 
@@ -141,38 +154,38 @@ class ToolLoopTests(unittest.TestCase):
         client = ScriptedClient([completion('{"evidence_gaps": ["Điều 3: chưa có căn cứ phạt"]}'),
                                  tool_completion(("c2", "web_search", '{"query": "mức phạt vi phạm hợp đồng"}')),
                                  completion('{"evidence_gaps": []}')])
-        with configured_agents(OpenAIChatClient(SETTINGS, client)) as agents:
+        with configured_agents(GeminiChatClient(SETTINGS, client)) as agents:
             agent = agents["agent_2_risk_scoring"]
             bind_tool(agent, "web_search", lambda p: {"results": [{"url": "https://vbpl.vn/x"}]})
             result = agent.run(AgentRequest("contract"))
         self.assertEqual(json.loads(result.text), {"evidence_gaps": []})
-        retry = client.requests[1]["input"][-1]
-        self.assertEqual(retry["role"], "user")
-        self.assertIn("Điều 3: chưa có căn cứ phạt", retry["content"])
+        role, text = last_text(client.requests[1])
+        self.assertEqual(role, "user")
+        self.assertIn("Điều 3: chưa có căn cứ phạt", text)
 
     def test_gaps_stay_after_reevaluation_budget_and_tool_errors_reach_the_model(self):
         gap = completion('{"evidence_gaps": ["thiếu căn cứ"]}')
         client = ScriptedClient([tool_completion(("c1", "legal_search", "{}")), gap, gap, gap])
         def broken(_):
             raise IntegrationNotConfigured("TODO: set QDRANT_URL")
-        with configured_agents(OpenAIChatClient(SETTINGS, client)) as agents:
+        with configured_agents(GeminiChatClient(SETTINGS, client)) as agents:
             agent = agents["agent_3_recommendation"]
             bind_tool(agent, "legal_search", broken)
             agent.tool_functions = {**agent.tool_functions, "legal_search": agent.tool_functions["qdrant_search"]}
             result = agent.run(AgentRequest("contract"))
-        self.assertIn("IntegrationNotConfigured", client.requests[1]["input"][-1]["output"])
+        self.assertIn("IntegrationNotConfigured", tool_result(client.requests[1]))
         self.assertEqual(len(client.requests), 4)  # first pass + 2 re-evaluations, then the honest gap is kept
         self.assertEqual(json.loads(result.text)["evidence_gaps"], ["thiếu căn cứ"])
 
     def test_tool_budget_forces_final_answer(self):
         loop = [tool_completion((f"c{i}", "legal_search", "{}")) for i in range(6)]
         client = ScriptedClient([*loop, completion('{"evidence_gaps": []}')])
-        with configured_agents(OpenAIChatClient(SETTINGS, client)) as agents:
+        with configured_agents(GeminiChatClient(SETTINGS, client)) as agents:
             agent = agents["agent_2_risk_scoring"]
             bind_tool(agent, "legal_search", lambda p: {"evidence": []})
             agent.run(AgentRequest("contract"))
-        self.assertEqual(client.requests[-1]["tool_choice"], "none")
-        self.assertNotIn("tool_choice", client.requests[0])
+        self.assertEqual(client.requests[-1]["toolConfig"], {"functionCallingConfig": {"mode": "NONE"}})
+        self.assertNotIn("toolConfig", client.requests[0])
 
 
 class OutputFormatTests(unittest.TestCase):
@@ -183,7 +196,7 @@ class OutputFormatTests(unittest.TestCase):
     def run_agent_3(self, *answers):
         client = ScriptedClient([completion(a) for a in answers])
         risk = {"agent_id": "agent_2_risk_scoring", "text": json.dumps({"findings": [{"finding_id": "F1"}]})}
-        with configured_agents(OpenAIChatClient(SETTINGS, client)) as agents:
+        with configured_agents(GeminiChatClient(SETTINGS, client)) as agents:
             agent = agents["agent_3_recommendation"]
             agent.output_model = RecommendationResult
             workflow = {"job_id": "j", "contract_id": "c", "contract_version": "1", "risk_scoring": risk}
@@ -193,15 +206,15 @@ class OutputFormatTests(unittest.TestCase):
     def test_invalid_output_is_sent_back_with_its_errors(self):
         client, result = self.run_agent_3("Đây là kết quả: ...", json.dumps(self.ADVICE))
         self.assertEqual(json.loads(result.text), self.ADVICE)
-        fix = client.requests[1]["input"][-1]
-        self.assertEqual(fix["role"], "user")
-        self.assertIn("not one JSON object", fix["content"])
+        role, text = last_text(client.requests[1])
+        self.assertEqual(role, "user")
+        self.assertIn("not one JSON object", text)
         self.assertEqual(result.usage["prompt_tokens"], 4)  # both calls billed
 
     def test_agent_cross_check_missing_finding_is_fixed(self):
         empty = {**self.ADVICE, "recommendations": []}
         client, result = self.run_agent_3(json.dumps(empty), json.dumps(self.ADVICE))
-        self.assertIn("thiếu đề xuất cho finding: ['F1']", client.requests[1]["input"][-1]["content"])
+        self.assertIn("thiếu đề xuất cho finding: ['F1']", last_text(client.requests[1])[1])
         self.assertEqual(json.loads(result.text)["recommendations"][0]["finding_id"], "F1")
 
     def test_output_still_invalid_after_retries_fails_the_call(self):
@@ -210,8 +223,8 @@ class OutputFormatTests(unittest.TestCase):
 
 
 class AgentBaseTests(unittest.TestCase):
-    def test_creation_does_not_require_openai_sdk_or_key(self):
-        with patch.dict(os.environ, {}, clear=True), patch.dict("sys.modules", {"openai": None}):
+    def test_creation_does_not_require_http_client_or_network(self):
+        with patch.dict(os.environ, {}, clear=True), patch.dict("sys.modules", {"httpx": None}):
             agents = create_agents()
             self.assertEqual(len(agents), 3)
             self.assertTrue(all(agent.provider._client is None for agent in agents.values()))
@@ -270,25 +283,25 @@ class AgentBaseTests(unittest.TestCase):
                 path.write_text(original, encoding="utf-8")
         self.assertEqual(provider.calls, [])
 
-    def test_three_agents_openai_chat_requests_fake_client(self):
+    def test_three_agents_gemini_requests_fake_client(self):
         client = FakeClient()
-        provider = OpenAIChatClient(SETTINGS, client)
+        provider = GeminiChatClient(SETTINGS, client)
         with configured_agents(provider) as agents:
             agents["agent_1_classification"].inference_config = {"max_completion_tokens": 42}
             result = test_pipeline(agents).run("Hợp đồng thử", {"case": ["one"]})
         self.assertEqual(list(result), list(agents))
         self.assertEqual(len(client.requests), 3)
-        self.assertEqual(client.requests[0]["max_output_tokens"], 42)  # Responses name of max_completion_tokens
-        self.assertEqual((client.requests[1]["max_output_tokens"], client.requests[1]["reasoning"]),
-                         (64000, {"effort": "high"}))  # Agent 2's shipped config.yaml
-        for request in client.requests:
-            self.assertEqual(request["model"], "test-model")
-            soul, core, external = request["input"][:3]
-            self.assertEqual((soul["role"], core["role"], external["role"]), ("system", "system", "system"))
+        self.assertEqual(client.requests[0]["generationConfig"], {"maxOutputTokens": 42})
+        self.assertEqual(client.requests[1]["generationConfig"],  # Agent 2's shipped config.yaml
+                         {"maxOutputTokens": 64000, "thinkingConfig": {"thinkingLevel": "high"}})
+        for url, headers, request in zip(client.urls, client.headers, client.requests):
+            self.assertTrue(url.endswith("/models/test-model:generateContent"))
+            self.assertEqual(headers["x-goog-api-key"], "test-key")
+            soul, core, external = request["systemInstruction"]["parts"][:3]
             self.assertNotIn("tools", request)  # no MCP bound: plain single call
-            self.assertEqual(soul["content"], "Test instructions for prompts/soul.md")
-            self.assertEqual(core["content"], "Test instructions for prompts/core.md")
-            self.assertEqual(external["content"], "Test instructions for prompts/external.md")
+            self.assertEqual(soul["text"], "Test instructions for prompts/soul.md")
+            self.assertEqual(core["text"], "Test instructions for prompts/core.md")
+            self.assertEqual(external["text"], "Test instructions for prompts/external.md")
         body = first_user(client.requests[2])
         self.assertEqual(body["context"]["case"], ["one"])
         self.assertEqual(body["context"]["workflow"]["risk_scoring"]["text"], "model result")
@@ -398,54 +411,75 @@ class AgentBaseTests(unittest.TestCase):
             EvidenceManager().validate()
         self.assertEqual(compact_context({"x": 1}, compactor=lambda data: data), {"x": 1})
 
-    def test_missing_openai_config_fails_before_client_call(self):
+    def test_missing_gemini_config_fails_before_client_call(self):
         client = FakeClient()
-        for settings in (OpenAISettings(), OpenAISettings("gpt-model"), OpenAISettings("", "sk-test")):
-            with self.subTest(settings=settings), self.assertRaisesRegex(ConfigurationError, "OPENAI"):
-                OpenAIChatClient(settings, client).generate([{"role": "user", "content": "hello"}])
+        for settings in (GeminiSettings(), GeminiSettings("gemini-model"), GeminiSettings("", "test-key")):
+            with self.subTest(settings=settings), self.assertRaisesRegex(ConfigurationError, "GEMINI"):
+                GeminiChatClient(settings, client).generate([{"role": "user", "content": "hello"}])
         self.assertEqual(client.requests, [])
-        self.assertNotIn("sk-test", repr(SETTINGS))
+        self.assertNotIn("test-key", repr(SETTINGS))
         self.assertEqual(SETTINGS.public(), {"model": "test-model"})
 
-    def test_incomplete_or_empty_openai_response_is_rejected(self):
-        for status, reason in (("incomplete", "max_output_tokens"), ("incomplete", "content_filter"), ("failed", None)):
-            with self.subTest(status=status, reason=reason), self.assertRaises(ModelResponseError):
-                OpenAIChatClient(SETTINGS, FakeClient(completion(status=status, reason=reason))).generate([])
-        with self.assertRaises(ModelResponseError):
-            OpenAIChatClient(SETTINGS, FakeClient(completion(text=" "))).generate([])
+    def test_incomplete_blocked_or_empty_gemini_response_is_rejected(self):
+        for reason in ("MAX_TOKENS", "SAFETY", "RECITATION", "MALFORMED_FUNCTION_CALL"):
+            with self.subTest(reason=reason), self.assertRaisesRegex(ModelResponseError, reason):
+                GeminiChatClient(SETTINGS, FakeClient(completion(reason=reason))).generate([])
+        for response in (completion(text=" "), FakeResponse({"promptFeedback": {"blockReason": "SAFETY"}}),
+                         FakeResponse({"candidates": []}),
+                         FakeResponse({"error": {"status": "INVALID_ARGUMENT", "message": "bad"}}, 400),
+                         FakeResponse({"error": {"status": "PERMISSION_DENIED"}}, 403)):
+            with self.subTest(response=response.data), self.assertRaises(ModelResponseError):
+                GeminiChatClient(SETTINGS, FakeClient(response)).generate([])
         with self.assertRaisesRegex(ModelResponseError, "not offered"):  # tool call without offered tools
-            OpenAIChatClient(SETTINGS, FakeClient(tool_completion(("c", "x", "{}")))).generate([])
-        with self.assertRaisesRegex(ConfigurationError, "stop"):
-            OpenAIChatClient(SETTINGS, FakeClient()).generate([], inference_config={"stop": ["x"]})
+            GeminiChatClient(SETTINGS, FakeClient(tool_completion(("s", "x", "{}")))).generate([])
+        with self.assertRaisesRegex(ConfigurationError, "reasoning_effort"):
+            GeminiChatClient(SETTINGS, FakeClient()).generate([], inference_config={"reasoning_effort": "xhigh"})
 
-    def test_responses_request_and_usage_mapping(self):
-        client = FakeClient(SimpleNamespace(status="completed", incomplete_details=None, output=[
-            SimpleNamespace(type="reasoning", content=[]),
-            SimpleNamespace(type="message", content=[SimpleNamespace(type="output_text", text="ok")])],
-            usage=FakeUsage({"input_tokens": 10, "output_tokens": 4, "total_tokens": 14,
-                             "input_tokens_details": {"cached_tokens": 6},
-                             "output_tokens_details": {"reasoning_tokens": 3}})))
-        result = OpenAIChatClient(SETTINGS, client).generate(
+    def test_gemini_request_and_usage_mapping(self):
+        client = FakeClient(FakeResponse({"candidates": [{"finishReason": "STOP", "content": {"role": "model", "parts": [
+            {"text": "thinking", "thought": True}, {"text": "ok"}]}}],
+            "usageMetadata": {"promptTokenCount": 10, "candidatesTokenCount": 1, "thoughtsTokenCount": 3,
+                              "totalTokenCount": 14, "cachedContentTokenCount": 6}}))
+        result = GeminiChatClient(SETTINGS, client).generate(
             [{"role": "system", "content": "s"}, {"role": "user", "content": "u"},
              {"role": "assistant", "content": None, "tool_calls": [
-                 {"id": "c1", "type": "function", "function": {"name": "web_search", "arguments": "{}"}}]},
-             {"role": "tool", "tool_call_id": "c1", "content": "{}"}],
-            inference_config={"max_completion_tokens": 50, "reasoning_effort": "high"})
-        sent = client.requests[0]
-        self.assertEqual(sent["input"], [{"role": "system", "content": "s"}, {"role": "user", "content": "u"},
-                                         {"type": "function_call", "call_id": "c1", "name": "web_search", "arguments": "{}"},
-                                         {"type": "function_call_output", "call_id": "c1", "output": "{}"}])
-        self.assertEqual((sent["max_output_tokens"], sent["reasoning"], sent["store"]), (50, {"effort": "high"}, False))
-        self.assertEqual((result.text, result.stop_reason), ("ok", "stop"))
+                 {"id": "c1", "type": "function", "function": {"name": "web_search", "arguments": '{"q": "x"}'},
+                  "thought_signature": "sig"}]},
+             {"role": "tool", "tool_call_id": "c1", "content": "not json"}],
+            inference_config={"max_completion_tokens": 50, "reasoning_effort": "high", "stop": ["x"]},
+            tools=[{"type": "function", "function": {"name": "web_search", "parameters": {"type": "object"}}}],
+            tool_choice="auto")
+        self.assertEqual(client.requests[0], {
+            "systemInstruction": {"parts": [{"text": "s"}]},
+            "contents": [{"role": "user", "parts": [{"text": "u"}]},
+                         {"role": "model", "parts": [{"functionCall": {"name": "web_search", "args": {"q": "x"}},
+                                                      "thoughtSignature": "sig"}]},
+                         {"role": "user", "parts": [{"functionResponse": {"name": "web_search",
+                                                                          "response": {"result": "not json"}}}]}],
+            "generationConfig": {"maxOutputTokens": 50, "stopSequences": ["x"], "thinkingConfig": {"thinkingLevel": "high"}},
+            "tools": [{"functionDeclarations": [{"name": "web_search", "description": "",
+                                                 "parametersJsonSchema": {"type": "object"}}]}],
+            "toolConfig": {"functionCallingConfig": {"mode": "AUTO"}}})
+        self.assertEqual((result.text, result.stop_reason), ("ok", "stop"))  # thought parts are not the answer
         self.assertEqual(result.usage, {"prompt_tokens": 10, "completion_tokens": 4, "total_tokens": 14,
                                         "prompt_tokens_details": {"cached_tokens": 6},
                                         "completion_tokens_details": {"reasoning_tokens": 3}})
 
-    def test_sdk_failure_is_propagated(self):
+    def test_gemini_tool_call_keeps_its_thought_signature(self):
+        tools = [{"type": "function", "function": {"name": "legal_search"}}]
+        result = GeminiChatClient(SETTINGS, FakeClient(tool_completion(("sig-1", "legal_search", '{"query": "phạt"}')))
+                                  ).generate([], tools=tools)
+        self.assertEqual(result.stop_reason, "tool_calls")
+        call, = result.tool_calls
+        self.assertEqual((call["name"], json.loads(call["arguments"]), call["thought_signature"]),
+                         ("legal_search", {"query": "phạt"}, "sig-1"))
+        self.assertTrue(call["id"])
+
+    def test_client_failure_is_propagated(self):
         client = FakeClient()
-        client.responses.create = lambda **_: (_ for _ in ()).throw(RuntimeError("OpenAI unavailable"))
-        with self.assertRaisesRegex(RuntimeError, "OpenAI unavailable"):
-            OpenAIChatClient(SETTINGS, client).generate([])
+        client.post = lambda *_, **__: (_ for _ in ()).throw(RuntimeError("Gemini unavailable"))
+        with self.assertRaisesRegex(RuntimeError, "Gemini unavailable"):
+            GeminiChatClient(SETTINGS, client).generate([])
 
     def test_config_precedence_and_unset_inference(self):
         with TemporaryDirectory() as directory, patch.dict(os.environ, {}, clear=True):
@@ -454,16 +488,17 @@ class AgentBaseTests(unittest.TestCase):
                 "model: yaml-model\ninference_config:\n  max_completion_tokens:\n",
                 encoding="utf-8")
             self.assertEqual(load_agent_config(path, "AGENT_1").model.model, "yaml-model")
-            os.environ.update(OPENAI_MODEL="global-model", AGENT_1_MODEL="agent-model", OPENAI_API_KEY="sk-env")
+            self.assertEqual(load_agent_config(path, "AGENT_1").model.api_key, "")  # key only from GEMINI_API_KEY
+            os.environ.update(GEMINI_MODEL="global-model", AGENT_1_MODEL="agent-model", GEMINI_API_KEY="env-key")
             self.assertEqual(load_agent_config(path, "AGENT_1").model.model, "agent-model")
             self.assertEqual(load_agent_config(path, "AGENT_2").model.model, "global-model")
-            self.assertEqual(load_agent_config(path, "AGENT_2").model.api_key, "sk-env")
+            self.assertEqual(load_agent_config(path, "AGENT_2").model.api_key, "env-key")
             config = load_agent_config(path, "AGENT_1", SETTINGS)
             self.assertEqual(config.model, SETTINGS)
             self.assertEqual(config.inference_config, {})
 
     def test_factory_uses_independent_agent_settings(self):
-        with patch.dict(os.environ, {"OPENAI_MODEL": "global-model", "AGENT_2_MODEL": "second-model"}, clear=True):
+        with patch.dict(os.environ, {"GEMINI_MODEL": "global-model", "AGENT_2_MODEL": "second-model"}, clear=True):
             agents = create_agents()
         self.assertEqual(agents["agent_1_classification"].provider.settings.model, "global-model")
         self.assertEqual(agents["agent_2_risk_scoring"].provider.settings.model, "second-model")
@@ -474,9 +509,9 @@ class AgentBaseTests(unittest.TestCase):
             agents = create_agents()
         chosen = {agent_id: (agent.provider.settings.model, agent.inference_config) for agent_id, agent in agents.items()}
         self.assertEqual(chosen, {
-            "agent_1_classification": ("gpt-6-luna", {"max_completion_tokens": 32000, "reasoning_effort": "medium"}),
-            "agent_2_risk_scoring": ("gpt-6.1-sol", {"max_completion_tokens": 64000, "reasoning_effort": "high"}),
-            "agent_3_recommendation": ("gpt-6.1-sol", {"max_completion_tokens": 32000, "reasoning_effort": "medium"})})
+            "agent_1_classification": ("gemini-3.5-flash-lite", {"max_completion_tokens": 32000, "reasoning_effort": "medium"}),
+            "agent_2_risk_scoring": ("gemini-3.5-flash-lite", {"max_completion_tokens": 64000, "reasoning_effort": "high"}),
+            "agent_3_recommendation": ("gemini-3.5-flash-lite", {"max_completion_tokens": 32000, "reasoning_effort": "medium"})})
 
     def test_malformed_config_fails_clearly(self):
         for text in ("[]", "false", "[not, mapping]", "model: 123", "region: x", "inference_config: [invalid]",

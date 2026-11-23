@@ -7,7 +7,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from fastapi import Request, HTTPException
 from common.schemas.agent_messages import AgentRequest, ModelResult
-from common.settings import OpenAISettings
+from common.settings import GeminiSettings
 from common.service_http import serve, read_json
 from common.service_jobs import job_app
 from agents.hermes.agent_factory import create_agent, AGENT_TYPES
@@ -19,10 +19,10 @@ from agents.hermes.summarizer import ModelMemorySummarizer
 
 
 class FixtureProvider:
-    """Opt-in transport test fixture. Never selected as a fallback for OpenAI errors.
+    """Opt-in transport test fixture. Never selected as a fallback for Gemini errors.
     Answers with the smallest output that matches the agent's schema (no business analysis), so the whole
     pipeline up to extraction.v2 runs without a model."""
-    settings = OpenAISettings("transport-fixture")
+    settings = GeminiSettings("transport-fixture")
 
     def __init__(self, agent_id=""):
         self.agent_id = agent_id
@@ -30,7 +30,7 @@ class FixtureProvider:
     def generate(self, messages, *, inference_config=None, tools=None, tool_choice=None):
         if not all(isinstance(m, dict) and m.get("role") in ("system", "user", "assistant")
                    and isinstance(m.get("content"), str) for m in messages):
-            raise ValueError("Messages are not in OpenAI chat format")
+            raise ValueError("Messages are not in chat format")
         try:
             request = json.loads(messages[-1]["content"])
         except ValueError:
@@ -74,9 +74,9 @@ class AgentRuntime:
     def __init__(self, agent_id):
         if agent_id not in AGENT_TYPES:
             raise ValueError("Unknown AGENT_ID")
-        self.mode = os.getenv("MODEL_PROVIDER", "openai")
-        if self.mode not in ("openai", "fixture"):
-            raise ValueError("MODEL_PROVIDER must be openai or fixture")
+        self.mode = os.getenv("MODEL_PROVIDER", "gemini")
+        if self.mode not in ("gemini", "fixture"):
+            raise ValueError("MODEL_PROVIDER must be gemini or fixture")
         if self.mode == "fixture" and os.getenv("APP_ENV") != "local":
             raise ValueError("Fixture mode requires APP_ENV=local")
         self.agent = create_agent(agent_id, provider=FixtureProvider(agent_id) if self.mode == "fixture" else None)
@@ -94,7 +94,7 @@ class AgentRuntime:
             self.agent.directory = directory
 
     def ready(self):
-        if self.mode == "openai":
+        if self.mode == "gemini":
             self.agent.provider.settings.validate()
         load_prompts(self.agent.directory)
         return {"model_provider": self.mode, "mcp_tools": self.mcp_tools,

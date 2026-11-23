@@ -2,7 +2,7 @@
 
 Layers: ServiceClient retries HTTP 429/5xx/transport (3x, sub-second); agent JobStore requeues a
 failed job only for RETRYABLE_JOB_ERRORS; this graph policy re-runs the node with longer backoff
-(OpenAI rate limits need seconds, not milliseconds). Validation/config/model-output errors fail fast.
+(Gemini rate limits need seconds, not milliseconds). Validation/config/model-output errors fail fast.
 """
 from langgraph.types import RetryPolicy
 

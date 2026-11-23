@@ -3,13 +3,13 @@ from pathlib import Path
 import re
 
 from common.exceptions import ConfigurationError
-from common.settings import OpenAISettings
-from integrations.external.openai_client import INFERENCE_KEYS, REASONING_EFFORTS
+from common.settings import GeminiSettings
+from integrations.external.gemini_client import INFERENCE_KEYS, REASONING_EFFORTS
 
 
 @dataclass(frozen=True)
 class AgentConfig:
-    model: OpenAISettings
+    model: GeminiSettings
     inference_config: dict = field(default_factory=dict)
 
 
@@ -28,7 +28,7 @@ def load_agent_config(directory: Path, env_prefix: str, settings=None) -> AgentC
     unknown = set(raw) - {"model", "inference_config"}
     if unknown:
         raise ConfigurationError(f"Unknown agent config keys: {list(unknown)}")
-    env = OpenAISettings.from_env(env_prefix)
+    env = GeminiSettings.from_env(env_prefix)
     model = raw.get("model")
     if model is not None and not isinstance(model, str):
         raise ConfigurationError("model must be a string or null")
@@ -48,7 +48,7 @@ def load_agent_config(directory: Path, env_prefix: str, settings=None) -> AgentC
     if tokens is not None and (isinstance(tokens, bool) or not isinstance(tokens, int) or tokens < 1):
         raise ConfigurationError("max_completion_tokens must be a positive integer")
     if settings is None:
-        settings = OpenAISettings(env.model or (model or "").strip(), env.api_key)
+        settings = GeminiSettings(env.model or (model or "").strip(), env.api_key)
     return AgentConfig(settings, configured)
 
 

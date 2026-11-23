@@ -3,7 +3,7 @@ from input_processing.schemas.processed_contract import JobError
 
 
 def utf8_estimate(text: str) -> int:
-    """Conservative byte-based estimate, NOT the selected OpenAI model's tokenizer."""
+    """Conservative byte-based estimate, NOT the selected model's tokenizer."""
     return len(text.encode("utf-8"))
 
 

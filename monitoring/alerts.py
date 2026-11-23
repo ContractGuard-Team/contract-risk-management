@@ -28,7 +28,7 @@ def evaluate(event, *, count_recent_throttles, limits=None):
         window = event["timestamp_ns"] // limits["throttle_window_ns"]
         if count_recent_throttles(event["timestamp_ns"] - limits["throttle_window_ns"]) >= limits["throttle_count"]:
             alerts.append({"key": f"model_throttled:{window}", "rule": "model_throttled", "severity": "warning",
-                           "summary": f"Model API (OpenAI) throttled/unavailable >= {limits['throttle_count']} times in the window"})
+                           "summary": f"Model API (Gemini) throttled/unavailable >= {limits['throttle_count']} times in the window"})
     if event["service"].startswith("data-"):
         # Legal data pipeline: a crawl run that did not finish cleanly, or a document given up after retries.
         if event["stage"] == "run" and event["status"] in ("failed", "incomplete"):

@@ -1,0 +1,137 @@
+[
+  {
+    "name": "s3",
+    "url": "https://raw.githubusercontent.com/awslabs/aws-icons-for-plantuml/main/dist/Storage/SimpleStorageService.png",
+    "file": "s3.png"
+  },
+  {
+    "name": "sqs",
+    "url": "https://raw.githubusercontent.com/awslabs/aws-icons-for-plantuml/main/dist/ApplicationIntegration/SimpleQueueService.png",
+    "file": "sqs.png"
+  },
+  {
+    "name": "ec2",
+    "url": "https://raw.githubusercontent.com/awslabs/aws-icons-for-plantuml/main/dist/Compute/EC2.png",
+    "file": "ec2.png"
+  },
+  {
+    "name": "dynamo",
+    "url": "https://raw.githubusercontent.com/awslabs/aws-icons-for-plantuml/main/dist/Database/DynamoDB.png",
+    "file": "dynamo.png"
+  },
+  {
+    "name": "eventbridge",
+    "url": "https://raw.githubusercontent.com/awslabs/aws-icons-for-plantuml/main/dist/ApplicationIntegration/EventBridge.png",
+    "file": "eventbridge.png"
+  },
+  {
+    "name": "secrets",
+    "url": "https://raw.githubusercontent.com/awslabs/aws-icons-for-plantuml/main/dist/SecurityIdentityCompliance/SecretsManager.png",
+    "file": "secrets.png"
+  },
+  {
+    "name": "iam",
+    "url": "https://raw.githubusercontent.com/awslabs/aws-icons-for-plantuml/main/dist/SecurityIdentityCompliance/IdentityandAccessManagement.png",
+    "file": "iam.png"
+  },
+  {
+    "name": "cloudwatch",
+    "url": "https://raw.githubusercontent.com/awslabs/aws-icons-for-plantuml/main/dist/ManagementGovernance/CloudWatch.png",
+    "file": "cloudwatch.png"
+  },
+  {
+    "name": "cloudfront",
+    "url": "https://raw.githubusercontent.com/awslabs/aws-icons-for-plantuml/main/dist/NetworkingContentDelivery/CloudFront.png",
+    "file": "cloudfront.png"
+  },
+  {
+    "name": "alb",
+    "url": "https://raw.githubusercontent.com/awslabs/aws-icons-for-plantuml/main/dist/NetworkingContentDelivery/ElasticLoadBalancing.png",
+    "file": "alb.png"
+  },
+  {
+    "name": "fargate",
+    "url": "https://raw.githubusercontent.com/awslabs/aws-icons-for-plantuml/main/dist/Containers/Fargate.png",
+    "file": "fargate.png"
+  },
+  {
+    "name": "ses",
+    "url": "https://raw.githubusercontent.com/awslabs/aws-icons-for-plantuml/main/dist/BusinessApplications/SimpleEmailService.png",
+    "file": "ses.png"
+  },
+  {
+    "name": "guardduty",
+    "url": "https://raw.githubusercontent.com/awslabs/aws-icons-for-plantuml/main/dist/SecurityIdentityCompliance/GuardDuty.png",
+    "file": "guardduty.png"
+  },
+  {
+    "name": "python",
+    "url": "https://raw.githubusercontent.com/simple-icons/simple-icons/develop/icons/python.svg",
+    "file": "python.svg"
+  },
+  {
+    "name": "docker",
+    "url": "https://raw.githubusercontent.com/simple-icons/simple-icons/develop/icons/docker.svg",
+    "file": "docker.svg"
+  },
+  {
+    "name": "react",
+    "url": "https://raw.githubusercontent.com/simple-icons/simple-icons/develop/icons/react.svg",
+    "file": "react.svg"
+  },
+  {
+    "name": "dotnet",
+    "url": "https://raw.githubusercontent.com/simple-icons/simple-icons/develop/icons/dotnet.svg",
+    "file": "dotnet.svg"
+  },
+  {
+    "name": "nginx",
+    "url": "https://raw.githubusercontent.com/simple-icons/simple-icons/develop/icons/nginx.svg",
+    "file": "nginx.svg"
+  },
+  {
+    "name": "railway",
+    "url": "https://raw.githubusercontent.com/simple-icons/simple-icons/develop/icons/railway.svg",
+    "file": "railway.svg"
+  },
+  {
+    "name": "supabase",
+    "url": "https://raw.githubusercontent.com/simple-icons/simple-icons/develop/icons/supabase.svg",
+    "file": "supabase.svg"
+  },
+  {
+    "name": "qdrant",
+    "url": "https://raw.githubusercontent.com/simple-icons/simple-icons/develop/icons/qdrant.svg",
+    "file": "qdrant.svg"
+  },
+  {
+    "name": "gemini",
+    "url": "https://raw.githubusercontent.com/simple-icons/simple-icons/develop/icons/googlegemini.svg",
+    "file": "gemini.svg"
+  },
+  {
+    "name": "langgraph",
+    "url": "https://raw.githubusercontent.com/simple-icons/simple-icons/develop/icons/langgraph.svg",
+    "file": "langgraph.svg"
+  },
+  {
+    "name": "fastapi",
+    "url": "https://raw.githubusercontent.com/simple-icons/simple-icons/develop/icons/fastapi.svg",
+    "file": "fastapi.svg"
+  },
+  {
+    "name": "postgres",
+    "url": "https://raw.githubusercontent.com/simple-icons/simple-icons/develop/icons/postgresql.svg",
+    "file": "postgres.svg"
+  },
+  {
+    "name": "github",
+    "url": "https://raw.githubusercontent.com/simple-icons/simple-icons/develop/icons/githubactions.svg",
+    "file": "github.svg"
+  },
+  {
+    "name": "mcp",
+    "url": "https://raw.githubusercontent.com/simple-icons/simple-icons/develop/icons/modelcontextprotocol.svg",
+    "file": "mcp.svg"
+  }
+]

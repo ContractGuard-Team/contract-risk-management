@@ -165,12 +165,12 @@ class ServiceArchitectureTests(unittest.TestCase):
         tokens = {"worker":"w"*40,"agent-1":"a"*40}
         env = {"MODEL_PARAMETER":"/agent/model", "CONFIG_POLICY_PATH":str(path),
                "CONFIG_CLIENT_TOKENS":json.dumps(tokens), "CONFIG_URL":"http://testserver", "CONFIG_TOKEN":tokens["agent-1"],
-               "CONFIG_SECRET_BINDINGS":json.dumps({"OPENAI_MODEL":"model"})}
+               "CONFIG_SECRET_BINDINGS":json.dumps({"GEMINI_MODEL":"model"})}
         with patch.dict(os.environ, env), TestClient(create_app()) as http:
             client = ServiceClient("http://testserver", token=tokens["agent-1"], client=http)
             with patch("config.client.ServiceClient", return_value=client):
                 bootstrap("agent-1", load_env=False)
-            self.assertEqual(os.environ["OPENAI_MODEL"], value)
+            self.assertEqual(os.environ["GEMINI_MODEL"], value)
         self.assertNotIn(value, self.output.getvalue())
 
     def test_telemetry_redacts_payloads_deduplicates_and_correlates(self):

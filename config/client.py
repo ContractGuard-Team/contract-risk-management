@@ -1,7 +1,7 @@
 """Load explicitly configured secret aliases at startup, never at build/import time.
 
 Every service lists the keys it needs in CONFIG_SECRET_BINDINGS (set per service in docker-compose.yml), e.g.
-'["INTERNAL_API_TOKEN", "OPENAI_API_KEY"]' (alias = key name) or {"TARGET_ENV": "alias"}. A key already set in the
+'["INTERNAL_API_TOKEN", "MCP_API_TOKEN"]' (alias = key name) or {"TARGET_ENV": "alias"}. A key already set in the
 environment (root .env -> Compose) is kept; only EMPTY keys are fetched from the Config service, which reads them
 from AWS Secrets Manager (API_KEYS_SECRET_ID). The Config service itself reads Secrets Manager directly.
 """
@@ -14,10 +14,10 @@ from common.service_client import RemoteServiceError, ServiceClient
 
 log = logging.getLogger("config.client")
 # Keys of the AWS Secrets Manager secret contract-risk/prod/api-keys, plus legacy runtime targets.
-API_KEYS = ("OPENAI_API_KEY", "TAVILY_API_KEY", "QDRANT_URL", "QDRANT_API_KEY", "SUPABASE_URL",
+API_KEYS = ("TAVILY_API_KEY", "QDRANT_URL", "QDRANT_API_KEY", "SUPABASE_URL",
             "SUPABASE_PUBLISHABLE_KEY", "SUPABASE_SECRET_KEY", "LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY",
             "MCP_API_TOKEN", "INTERNAL_API_TOKEN")
-ALLOWED_TARGETS = {*API_KEYS, "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "OPENAI_MODEL",
+ALLOWED_TARGETS = {*API_KEYS, "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "GEMINI_MODEL",
                    "POSTGRES_DSN"}
 
 

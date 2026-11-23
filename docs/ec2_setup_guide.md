@@ -68,7 +68,7 @@ nano .env
 
 ```dotenv
 APP_ENV=production
-MODEL_PROVIDER=openai
+MODEL_PROVIDER=gemini
 AWS_REGION=ap-southeast-1
 API_KEYS_SECRET_ID=contract-risk/prod/api-keys
 WORKER_ENABLED=false
@@ -95,14 +95,14 @@ Template đang trỏ tới queue/bucket ContractGuard của đối tác. `WORKER
 
 Trên EC2 để trống `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, `AWS_ENDPOINT_URL`. SDK lấy credential của instance role. Không chép credential local sang EC2.
 
-Model mặc định đã có trong `agents/<agent>/config.yaml`: Agent 1 `gpt-6-luna`, Agent 2/3 `gpt-6.1-sol`. Có thể điền `AGENT_1_MODEL`/`AGENT_2_MODEL`/`AGENT_3_MODEL` để chọn model tài khoản được cấp quyền. `OPENAI_MODEL` ghi đè mặc định chung. Prompt nghiệp vụ và `configs/memory.yaml` đã có nội dung; cần rà lại theo workload khi đổi model.
+Model mặc định đã có trong `agents/<agent>/config.yaml`: cả 3 agent `gemini-3.5-flash-lite` (thử nghiệm, key Gemini ghi trong `common/settings.py`). Có thể điền `AGENT_1_MODEL`/`AGENT_2_MODEL`/`AGENT_3_MODEL` để chọn model khác. `GEMINI_MODEL` ghi đè mặc định chung, `GEMINI_API_KEY` ghi đè key. Prompt nghiệp vụ và `configs/memory.yaml` đã có nội dung; cần rà lại theo workload khi đổi model.
 
 ## 4. Secret và quyền dịch vụ
 
 Config service lấy JSON từ `API_KEYS_SECRET_ID`. Secret hiện dùng các tên khóa sau; không đưa giá trị vào `.env`:
 
 ```text
-INTERNAL_API_TOKEN       MCP_API_TOKEN        OPENAI_API_KEY
+INTERNAL_API_TOKEN       MCP_API_TOKEN
 TAVILY_API_KEY           QDRANT_URL           QDRANT_API_KEY
 SUPABASE_URL             SUPABASE_PUBLISHABLE_KEY
 SUPABASE_SECRET_KEY      LANGFUSE_PUBLIC_KEY  LANGFUSE_SECRET_KEY
@@ -131,7 +131,7 @@ Hai bảng DynamoDB phải có schema:
 
 IAM policy tham khảo nằm trong `infrastructure/aws/`; chúng không thay toàn bộ quyền worker/cross-account của môi trường. `preflight.sh` kiểm STS và list bucket tham chiếu từ container, không chứng minh mọi quyền S3/SQS/DynamoDB hay quyền gọi OpenAI đã đúng.
 
-Container bridge cần truy cập được IMDS của instance role; script preflight nhắc kiểm tra IMDSv2 hop limit ≥ 2. Cần đường ra AWS APIs, OpenAI, Qdrant, Supabase, Tavily, website pháp luật và Langfuse nếu bật. Không cần mở cổng service nội bộ ra Internet; monitoring chỉ bind loopback.
+Container bridge cần truy cập được IMDS của instance role; script preflight nhắc kiểm tra IMDSv2 hop limit ≥ 2. Cần đường ra AWS APIs, Gemini API (generativelanguage.googleapis.com), Qdrant, Supabase, Tavily, website pháp luật và Langfuse nếu bật. Không cần mở cổng service nội bộ ra Internet; monitoring chỉ bind loopback.
 
 ## 5. Đưa model embedding/reranker lên EC2
 
@@ -284,7 +284,7 @@ sudo systemctl start contract-data-processor contract-data-collector
 | Config lỗi AWS/secret | Region, secret ID, quyền GetSecretValue/KMS, instance role và IMDS; không in secret để debug |
 | Preflight STS thất bại | IAM role, IMDS hop limit, route/egress của container, bỏ AWS_ENDPOINT_URL giả lập |
 | Worker healthy nhưng không nhận job | `WORKER_ENABLED`, queue URL, message protocol, quyền SQS; worker idle là trạng thái hợp lệ |
-| OpenAI từ chối/thiếu model | Key trong Secrets Manager, model trong env/config, quyền tài khoản và Responses API; readiness chưa kiểm gọi model thật |
+| Gemini từ chối/thiếu model | Key `GEMINI_API_KEY` trong `.env`, model trong env/config, quota/rate limit của key; readiness chưa kiểm gọi model thật |
 | RAG trả rỗng | Kho luật chưa nạp, filter hiệu lực, collection/schema vector, cache embedding/reranker |
 | Systemd không đọc source/.env | Checkout trong `/opt`, quyền traverse/read của `contract-data`, `.env` group/mode; `ProtectHome=true` |
 | Thay env nhưng chưa có tác dụng | Recreate service bằng Compose; restart systemd nếu thay cấu hình pipeline |

@@ -13,14 +13,15 @@ config token. Không có Docker socket; monitoring bind loopback `127.0.0.1:8099
 
 Local đã tạo: APP_ENV=local, MODEL_PROVIDER=fixture, WORKER_ENABLED=false.
 Ba agent chạy fixture rõ ràng để kiểm tra transport; không tạo phân tích pháp lý thật.
-Worker idle có health `mode=idle`, không gọi SQS. Không âm thầm fallback từ OpenAI
+Worker idle có health `mode=idle`, không gọi SQS. Không âm thầm fallback từ Gemini
 sang fixture khi lỗi. Fixture bị từ chối nếu APP_ENV khác local.
 
-Production: APP_ENV=production, MODEL_PROVIDER=openai; key lấy từ Secrets Manager (mục dưới).
-Model mặc định trong config.yaml từng agent; OPENAI_MODEL hoặc AGENT_1/2/3_MODEL dùng để ghi đè.
+Production: APP_ENV=production, MODEL_PROVIDER=gemini. Key Gemini chỉ đặt GEMINI_API_KEY trong root .env (gitignored),
+KHÔNG qua Secrets Manager và không ghi trong code. Model mặc định trong config.yaml
+từng agent (`gemini-3.5-flash-lite`); GEMINI_MODEL hoặc AGENT_1/2/3_MODEL dùng để ghi đè.
 Prompt nghiệp vụ, configs/memory.yaml và short_term_summary đã có nội dung (2026-11-18).
 Prompt long_term_reflection còn trống nên tự đề xuất bài học đang được bỏ qua. Readiness kiểm cấu hình
-bắt buộc, không kiểm gọi OpenAI thật. Xem [hướng dẫn EC2](ec2_setup_guide.md).
+bắt buộc, không kiểm gọi Gemini thật. Xem [hướng dẫn EC2](ec2_setup_guide.md).
 
 Bật WORKER_ENABLED=true sau khi đặt SQS URL, DynamoDB table, input/output S3 bucket.
 URLs nội bộ do Compose cấp theo service name; không dùng localhost để gọi container khác.
@@ -38,7 +39,7 @@ Container phải tới được IMDS (hop limit ≥ 2). Compose không provision
 Data pipeline (EC2 systemd) đọc chính root `.env` (đã bỏ `data_pipeline/.env.example` và `/etc/contract-risk/data-pipeline.env`).
 Vẫn giữ `.env.example` vì `.env` không được commit: máy mới (EC2) cần mẫu để tạo `.env`, `scripts/init_env.py` đọc nó.
 
-**Secrets Manager `contract-risk/prod/api-keys`** — JSON 11 key: INTERNAL_API_TOKEN, MCP_API_TOKEN, OPENAI_API_KEY,
+**Secrets Manager `contract-risk/prod/api-keys`** — JSON 10 key: INTERNAL_API_TOKEN, MCP_API_TOKEN,
 TAVILY_API_KEY, QDRANT_URL, QDRANT_API_KEY, SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, SUPABASE_SECRET_KEY,
 LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY. `.env`: `API_KEYS_SECRET_ID=contract-risk/prod/api-keys`.
 
@@ -53,8 +54,8 @@ Config service tự đọc INTERNAL_API_TOKEN thẳng từ Secrets Manager; data
 | Service | Key được cấp (config/policy.json = CONFIG_SECRET_BINDINGS trong compose) |
 | --- | --- |
 | config, worker, input-processing, langgraph | INTERNAL_API_TOKEN |
-| agent-1 | INTERNAL_API_TOKEN, OPENAI_API_KEY |
-| agent-2, agent-3 | INTERNAL_API_TOKEN, OPENAI_API_KEY, MCP_API_TOKEN |
+| agent-1 | INTERNAL_API_TOKEN (GEMINI_API_KEY lấy từ .env qua Compose, không qua Config) |
+| agent-2, agent-3 | INTERNAL_API_TOKEN, MCP_API_TOKEN |
 | monitoring | INTERNAL_API_TOKEN, LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY |
 | mcp | INTERNAL_API_TOKEN, MCP_API_TOKEN, TAVILY_API_KEY, QDRANT_URL, QDRANT_API_KEY, SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, SUPABASE_SECRET_KEY |
 | data pipeline (systemd) | QDRANT_URL, QDRANT_API_KEY, SUPABASE_URL, SUPABASE_SECRET_KEY, INTERNAL_API_TOKEN (gửi monitoring) |

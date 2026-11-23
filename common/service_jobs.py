@@ -145,7 +145,7 @@ class JobRunner:
             self.store.update(key, owner, stage="completed", progress=100, status="completed", result=result)
             emit(self.service, "job", "completed", duration_ms=(time.monotonic()-started)*1000, **payload["identity"])
         except Exception as exc:
-            if type(exc).__name__ == "TransientModelError":  # its message is status/code only (openai_client.py)
+            if type(exc).__name__ == "TransientModelError":  # its message is status/code only (gemini_client.py)
                 log.warning("Job %s failed: %s", key, exc)
             try:
                 self.store.update(key, owner, stage="failed", progress=0, status="failed", error_type=type(exc).__name__)

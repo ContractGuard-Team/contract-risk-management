@@ -1,13 +1,11 @@
-# Model chosen 2026-11-18. Precedence: explicit settings > AGENT_<n>_MODEL > OPENAI_MODEL > this file.
-# The API key comes only from OPENAI_API_KEY (Secrets Manager via Config Service), never from this file.
-# gpt-6.1-sol: 1,050,000 context window, 922,000 max input, 128,000 max output (developers.openai.com/api/docs/models).
-model: gpt-6.1-sol
-# OpenAI Responses API options. max_completion_tokens -> max_output_tokens (reasoning tokens count toward it;
-# a cut-off answer fails the job), reasoning_effort -> reasoning.effort. temperature/top_p stay empty: OpenAI says to
-# omit them on its reasoning models. `stop` is not supported by the Responses API.
-# Agent 2 chấm cả hợp đồng, phán quyết R01–R20 có bằng chứng: reasoning high, 64k output.
-# Không để trần model (128k): OpenAI tính max_output_tokens vào giới hạn TPM ngay khi nhận request (xem Agent 3).
-# 64k chứ không 32k như Agent 1/3 vì reasoning high trên cả hợp đồng tốn token suy luận hơn.
+# Model chọn 2026-11-23 (thử nghiệm Gemini). Precedence: explicit settings > AGENT_2_MODEL > GEMINI_MODEL > this file.
+# API key: chỉ lấy từ GEMINI_API_KEY (root .env, gitignored; Compose truyền vào agent). Không ghi key trong code.
+# gemini-3.5-flash-lite: ~1M token input, 65.536 token output (ai.google.dev/gemini-api/docs/models).
+model: gemini-3.5-flash-lite
+# Gemini generateContent options (integrations/external/gemini_client.py). max_completion_tokens -> maxOutputTokens
+# (thinking tokens count toward it; a cut-off answer fails the job), reasoning_effort -> thinkingConfig.thinkingLevel
+# (minimal | low | medium | high), stop -> stopSequences. temperature/top_p để trống: Google khuyên giữ mặc định với Gemini 3.
+# Agent 2 chấm cả hợp đồng, phán quyết R01–R20 có bằng chứng: thinking high, 64k output (trần model 65.536).
 inference_config:
   max_completion_tokens: 64000
   reasoning_effort: high

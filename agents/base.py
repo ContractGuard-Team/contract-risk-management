@@ -198,7 +198,9 @@ class BaseAgent:
                     rounds += 1
                     tool_calls += len(response.tool_calls)
                     transcript.append({"role": "assistant", "content": response.text or None, "tool_calls": [
-                        {"id": c["id"], "type": "function", "function": {"name": c["name"], "arguments": c["arguments"]}}
+                        {"id": c["id"], "type": "function", "function": {"name": c["name"], "arguments": c["arguments"]},
+                         # Gemini 3 rejects the next round if a function call comes back without its signature
+                         **({"thought_signature": c["thought_signature"]} if c.get("thought_signature") else {})}
                         for c in response.tool_calls]})
                     transcript += [{"role": "tool", "tool_call_id": c["id"], "content": self._tool_message(c, observer)}
                                    for c in response.tool_calls]
