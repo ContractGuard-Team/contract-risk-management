@@ -95,7 +95,7 @@ Template đang trỏ tới queue/bucket ContractGuard của đối tác. `WORKER
 
 Trên EC2 để trống `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, `AWS_ENDPOINT_URL`. SDK lấy credential của instance role. Không chép credential local sang EC2.
 
-Model mặc định đã có trong `agents/<agent>/config.yaml`: cả 3 agent `gemini-3.5-flash-lite` (thử nghiệm, key Gemini ghi trong `common/settings.py`). Có thể điền `AGENT_1_MODEL`/`AGENT_2_MODEL`/`AGENT_3_MODEL` để chọn model khác. `GEMINI_MODEL` ghi đè mặc định chung, `GEMINI_API_KEY` ghi đè key. Prompt nghiệp vụ và `configs/memory.yaml` đã có nội dung; cần rà lại theo workload khi đổi model.
+Model mặc định đã có trong `agents/<agent>/config.yaml`: cả 3 agent `gemini-3.5-flash-lite`. Key Gemini đặt ở `GEMINI_API_KEY` trong `.env` (không ghi trong code). Có thể điền `AGENT_1_MODEL`/`AGENT_2_MODEL`/`AGENT_3_MODEL` để chọn model khác; `GEMINI_MODEL` ghi đè mặc định chung. Prompt nghiệp vụ và `configs/memory.yaml` đã có nội dung; cần rà lại theo workload khi đổi model.
 
 ## 4. Secret và quyền dịch vụ
 
