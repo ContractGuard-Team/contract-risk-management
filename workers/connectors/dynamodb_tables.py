@@ -1,9 +1,11 @@
 """Two-table DynamoDB transport; uses the SDK credential chain (EC2 IAM role)."""
 from decimal import Decimal
 from threading import local
+import time
 
 from boto3.dynamodb.types import TypeDeserializer, TypeSerializer
 from botocore.config import Config
+from botocore.exceptions import ClientError
 
 
 def native(value):
@@ -14,6 +16,20 @@ def native(value):
     if isinstance(value, (list, tuple)):
         return [native(item) for item in value]
     return value
+
+
+def write(call, attempts=4):
+    """Repeat a write that met another write on the same row (heartbeat vs final log), not a failed condition."""
+    for attempt in range(attempts):
+        try:
+            return call()
+        except ClientError as exc:
+            reasons = [r.get("Code") for r in exc.response.get("CancellationReasons", [])]
+            busy = exc.response["Error"]["Code"] == "TransactionConflictException" or (
+                "TransactionConflict" in reasons and "ConditionalCheckFailed" not in reasons)
+            if not busy or attempt == attempts - 1:
+                raise
+            time.sleep(0.05 * 2 ** attempt)
 
 
 class DynamoTables:
@@ -56,14 +72,10 @@ class DynamoTables:
                 if key in arguments:
                     arguments[key] = self.encode(arguments[key])
             encoded.append({kind: arguments})
-        self.client.transact_write_items(TransactItems=encoded)
+        write(lambda: self.client.transact_write_items(TransactItems=encoded))
 
     def event(self, job_id, event_id):
         return self.get(self.events_table, {"job_id": job_id, "event_id": event_id})
-
-    def event_put(self, item):
-        return {"Put": {"TableName": self.events_table, "Item": item,
-                        "ConditionExpression": "attribute_not_exists(job_id) AND attribute_not_exists(event_id)"}}
 
     def validate_schema(self):
         for table, expected in ((self.jobs_table, [("job_id", "HASH")]),

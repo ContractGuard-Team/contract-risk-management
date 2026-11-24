@@ -175,3 +175,10 @@ class AnalysisResult(Strict):
     def to_json(self) -> dict:
         """The file content: optional fields without a value are left out."""
         return self.model_dump(mode="json", exclude_none=True)
+
+
+def error_result(job_id, contract_id, contract_version) -> dict:
+    """Result file of a job that could not be processed: every AnalysisResult key, null when there is no value.
+    Only written with a `failed` message; consumers read result_key after `completed`, never this."""
+    return {**dict.fromkeys(AnalysisResult.model_fields), "schema_version": "2.0.0", "job_id": job_id,
+            "contract_id": contract_id, "contract_version": contract_version, "document_complete": False}

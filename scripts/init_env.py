@@ -10,7 +10,7 @@ def main():
     if destination.exists():
         raise SystemExit(".env already exists; preserve its values and update from .env.example manually.")
     local = {"APP_ENV": "local", "MODEL_PROVIDER": "fixture", "WORKER_ENABLED": "false",
-             "MONITORING_WORKER_ENABLED": "false"}
+             "LANGFUSE_ENABLED": "false"}
     # API keys are never written here: services fetch them from Secrets Manager via the Config service,
     # so even a local run needs AWS credentials that can read API_KEYS_SECRET_ID.
     lines = ["# LOCAL root .env (gitignored, never commit). Fixture model, worker idle. No API keys in this file."]

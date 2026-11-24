@@ -154,7 +154,8 @@ class AgentRuntime:
         from agents.shared.tools import JOB_CONTEXT
         token = JOB_CONTEXT.set(dict(payload["identity"]))  # MCP resolves this job's documents itself
         try:
-            result = self.agent.run(AgentRequest(**payload["request"]), memory=memory, observer=observer)
+            result = self.agent.run(AgentRequest(**payload["request"]), memory=memory, observer=observer,
+                                    guard=guard)
         finally:
             JOB_CONTEXT.reset(token)
         guard()

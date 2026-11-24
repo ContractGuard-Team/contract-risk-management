@@ -74,12 +74,11 @@ def main():
            "AWS_EC2_METADATA_DISABLED":"true", "AWS_ENDPOINT_URL":"http://127.0.0.1:5000",
            "WORKER_ENABLED":"true", "WORKER_INPUT_PROCESSING_URL":"http://input-processing:8000",
            "WORKER_LANGGRAPH_URL":"http://langgraph:8000", "WORKER_DYNAMODB_TABLE":"smoke-jobs",
-           "WORKER_DYNAMODB_EVENTS_TABLE":"smoke-events", "DATA_DIR":"/tmp/worker-smoke-data",
+           "WORKER_DYNAMODB_EVENTS_TABLE":"smoke-events", 
            "WORKER_OUTPUT_BUCKET":"smoke-output", "WORKER_INPUT_BUCKET":"smoke-input",
            "WORKER_SHUTDOWN_SECONDS":"5", "MONITORING_URL":"http://monitoring:8000",
            "WORKER_RESULTS_QUEUE_URL":""}  # internal message format; .env may enable ContractGuard mode
     process = None
-    monitor_process = None
     log_path = Path("/tmp/worker-smoke.log")
     try:
         session = boto3.Session(aws_access_key_id="testing", aws_secret_access_key="testing", region_name="ap-southeast-1")
@@ -138,72 +137,16 @@ def main():
                 assert text not in json.dumps(events)
                 metrics = client.get("http://monitoring:8000/v1/metrics", headers=headers).json()
                 assert {"worker","input-processing","langgraph","agent-1","agent-2","agent-3","monitoring","config"} <= set(metrics["events_by_service"])
-            assert history.get_item(Key={"job_id":job_id,"event_id":"completed"}).get("Item")
-            # Agent 3 output -> progress writer -> both tables, written in one transaction per event.
+            # events table: one outcome log per job, nothing else.
             from boto3.dynamodb.conditions import Key
-            logs = history.query(KeyConditionExpression=Key("job_id").eq(job_id))["Items"]
-            phases = sorted((l for l in logs if l["record_type"] == "worker_progress"), key=lambda l: int(l["sequence"]))
-            stages = [l["stage"] for l in phases]
-            for stage in ("downloading", "dispatching", "processing", "saving_result", "completed"):
-                assert stage in stages, (stage, stages)
-            # Agent stages come from polling LangGraph: a fast stage can fall between two polls.
-            assert any(s.startswith("agent_") for s in stages), stages
-            assert [int(l["progress"]) for l in phases] == sorted(int(l["progress"]) for l in phases)
-            receipt = history.get_item(Key={"job_id":job_id,"event_id":"completed"})["Item"]
-            assert receipt["output"] == row["output"] == phases[-1]["output"]
-            assert {l["runtime_id"] for l in logs} == {row["runtime_id"]}
-            print(f"PASS: Agent 3 output -> DynamoDB jobs row completed + events history {stages} + completion receipt, same S3 output", flush=True)
-
-            # Exercise the real collector outbox -> worker HTTP -> progress process.
-            # Isolated collector prevents redirecting any existing local/cloud telemetry.
-            monitor_env = {**env, "PORT":"8001", "DATA_DIR":"/tmp/monitoring-smoke-data", "MONITORING_URL":"", "LANGFUSE_ENABLED":"false",
-                           "MONITORING_WORKER_ENABLED":"true", "MONITORING_WORKER_URL":"http://127.0.0.1:8000"}
-            with Path("/tmp/monitoring-smoke.log").open("w") as monitor_log:
-                monitor_process = subprocess.Popen([sys.executable,"-m","monitoring.service"], env=monitor_env,
-                    stdout=monitor_log, stderr=subprocess.STDOUT)
-                with httpx.Client(timeout=10) as client:
-                    def monitor_ready():
-                        if monitor_process.poll() is not None:
-                            raise RuntimeError("Isolated collector exited")
-                        try:
-                            return client.get("http://127.0.0.1:8001/readyz").status_code == 200
-                        except httpx.TransportError:
-                            return False
-                    wait_for(monitor_ready, 20)
-                    for event in events:
-                        response = client.post("http://127.0.0.1:8001/v1/events", json=event, headers=headers)
-                        assert response.status_code == 200
-                    wait_for(lambda: all(history.get_item(Key={"job_id":job_id,"event_id":"monitoring:"+e["event_id"]}).get("Item") for e in events))
-                    assert table.get_item(Key=current_key)["Item"]["status"] == "completed"
-
-                    # An active run receives projected progress, not premature completion.
-                    from workers.connectors.dynamodb_tables import DynamoTables
-                    from workers.runtime.contract_job_store import ContractJobStore
-                    from workers.schemas import QueueJob
-                    store = ContractJobStore(DynamoTables("smoke-jobs","smoke-events","ap-southeast-1",
-                        client=session.client("dynamodb", endpoint_url=env["AWS_ENDPOINT_URL"])))
-                    probe_job = QueueJob.from_body({"job_id":"probe-"+run_id,"contract_id":"probe-contract-"+run_id,
-                        "bucket":"smoke-input","source_file_key":filename})
-                    probe = store.reserve(probe_job)
-                    store.claim(probe_job.job_id, probe["runtime_id"], "probe-owner", 180)
-                    store.bind_input(probe_job.job_id,"probe-owner","a"*64)
-                    store.bind_trace(probe_job.job_id,"probe-owner","c"*32)
-                    probe_event = {"event_id":uuid4().hex,"timestamp_ns":time.time_ns(),"service":"agent-2",
-                        "stage":"agent_2_risk_scoring","status":"completed","job_id":probe_job.job_id,
-                        "contract_id":probe_job.contract_id,"runtime_id":probe["runtime_id"],"trace_id":"c"*32,"request_id":"c"*32}
-                    assert client.post("http://127.0.0.1:8001/v1/events", json=probe_event, headers=headers).status_code == 200
-                    wait_for(lambda: store.client.get(probe_job.job_id)["progress"] == 75)
-                    assert store.client.get(probe_job.job_id)["status"] == "running"
-                    assert history.get_item(Key={"job_id":probe_job.job_id,"event_id":"monitoring:"+probe_event["event_id"]}).get("Item")
-                    store.release(probe_job.job_id,"probe-owner")
-                monitor_process.terminate()
-                monitor_code = monitor_process.wait(timeout=25)
-                monitor_tail = Path("/tmp/monitoring-smoke.log").read_text()[-3000:]
-                # uvicorn>=0.29 re-raises SIGTERM after a graceful shutdown, so -15 is a clean stop too.
-                assert monitor_code in (0, -15) and "Application shutdown complete" in monitor_tail, (monitor_code, monitor_tail)
+            def logs(job):
+                return history.query(KeyConditionExpression=Key("job_id").eq(job))["Items"]
+            [outcome] = logs(job_id)
+            assert (outcome["event_id"], outcome["status"]) == ("outcome", "completed") and outcome["output"] == row["output"]
+            assert (row["location"], row["status"]) == ("worker", "completed")
+            print("PASS: jobs row completed at worker + one completed log with the same S3 output", flush=True)
 
             # A new job for the same contract resets only the current row.
-            old_receipt = history.get_item(Key={"job_id":job_id,"event_id":"completed"})["Item"]
             next_body = {**json.loads(body), "job_id":job_id+"-rerun"}
             sqs.send_message(QueueUrl=queue, MessageBody=json.dumps(next_body))
             def rerun_complete():
@@ -212,11 +155,20 @@ def main():
             rerun = wait_for(rerun_complete)
             wait_for(empty_queue, 15)
             assert rerun["runtime_id"] != row["runtime_id"]
-            assert history.get_item(Key={"job_id":job_id,"event_id":"completed"})["Item"] == old_receipt
+            assert logs(job_id) == [outcome]
             sqs.send_message(QueueUrl=queue, MessageBody=body)
             wait_for(empty_queue, 15)
             assert table.get_item(Key=current_key)["Item"]["active_job_id"] == next_body["job_id"]
-            print("PASS: monitoring outbox -> worker HTTP/inbox -> two-table history and live contract progress", flush=True)
+            # Cancel: the worker answers, removes the message and never runs it.
+            cancelled_body = {**json.loads(body), "job_id":job_id+"-cancel"}
+            with httpx.Client(timeout=10) as client:
+                answer = client.post(f"http://127.0.0.1:8000/v1/jobs/{cancelled_body['job_id']}/cancel", headers=headers)
+                assert answer.status_code == 200 and answer.json()["status"] == "cancelled"
+            sqs.send_message(QueueUrl=queue, MessageBody=json.dumps(cancelled_body))
+            wait_for(empty_queue, 15)
+            assert [l["status"] for l in logs(cancelled_body["job_id"])] == ["cancelled"]
+            assert table.get_item(Key=current_key)["Item"]["active_job_id"] == next_body["job_id"]
+            print("PASS: cancelled job logged, removed and not processed", flush=True)
             print("PASS: same-contract new job resets current state; old event history and duplicate protection retained", flush=True)
             print("PASS: SQS -> S3 -> processing -> LangGraph -> three agent services -> S3/DynamoDB -> SQS ACK", flush=True)
             print("PASS: runtime generated, duplicate reused result, trace correlation and token usage observed", flush=True)
@@ -233,9 +185,6 @@ def main():
         if process is not None and process.poll() is None:
             process.kill()
             process.wait(timeout=5)
-        if monitor_process is not None and monitor_process.poll() is None:
-            monitor_process.kill()
-            monitor_process.wait(timeout=5)
         server.stop()
 
 

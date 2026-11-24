@@ -1,5 +1,8 @@
 # Monitoring — ghi chú bàn giao (2026-11-07)
 
+Cập nhật 2026-11-24: monitoring không còn chuyển sự kiện sang worker/DynamoDB; lỗi Langfuse hiện ở `/readyz` (xem đầu file
+[langfuse_monitoring.md](langfuse_monitoring.md)). Trạng thái mới: `retrying` (worker, sẽ thử lại) và `cancelled` (không tính là lỗi).
+
 Đọc file này trước khi sửa `monitoring/`. Langfuse: [langfuse_monitoring.md](langfuse_monitoring.md).
 
 ## Thành phần
@@ -7,7 +10,7 @@
 | File | Vai trò |
 | --- | --- |
 | `client.py` | `emit()` in JSON ra stdout rồi đẩy vào **hàng đợi trong RAM** (1000, thread nền gửi `POST /v1/events`). Không bao giờ chặn luồng xử lý hợp đồng khi collector chậm/sập; đầy hàng đợi → `dropped_queue_full`. `flush()` khi tắt process |
-| `service.py` | Collector: sanitize allowlist → SQLite `/data/events.sqlite3` (outbox Langfuse + worker), đánh giá alert, retention |
+| `service.py` | Collector: sanitize allowlist → SQLite `/data/events.sqlite3` (outbox Langfuse), đánh giá alert, retention |
 | `metrics.py` | `GET /v1/metrics?window_minutes=60`: theo `service.stage` count/completed/failed/error_rate/avg/p95/max ms; token theo agent/model; lỗi theo loại; job hoàn tất/lỗi; 50 job lỗi gần nhất |
 | `tracing.py` | `GET /v1/traces/{trace_id}`: timeline một job qua các service (thứ tự, at_ms, duration, status, lỗi đầu tiên, wall time) |
 | `alerts.py` | Luật: `job_failed` (1 alert/job dù lỗi lan qua agent → langgraph → worker), `model_throttled` (≥3 `TransientModelError`/10 phút), `slow_stage` (≥15 phút). Lưu bảng `alerts`, in log JSON `{"alert":...}`, gửi `ALERT_WEBHOOK_URL` (https, payload `{"text","alert"}` hợp Slack). `GET /v1/alerts` |
@@ -35,7 +38,7 @@ docker compose exec monitoring python -c "import os,json,urllib.request as u;pri
 ## Cấu hình (.env)
 
 `LOG_LEVEL=INFO`, `MONITORING_RETENTION_DAYS=30` (xóa event/alert cũ mỗi giờ, không xóa hàng chưa
-export Langfuse/worker hoặc alert chưa gửi webhook), `ALERT_WEBHOOK_URL=`, `ALERT_SLOW_STAGE_MS=900000`,
+export Langfuse hoặc alert chưa gửi webhook), `ALERT_WEBHOOK_URL=`, `ALERT_SLOW_STAGE_MS=900000`,
 `ALERT_THROTTLE_COUNT=3`, `ALERT_THROTTLE_WINDOW_MINUTES=10`, `MONITORING_QUEUE_SIZE=1000`.
 
 ## Dockerfile (thay đổi kèm theo)
@@ -81,8 +84,6 @@ token `INTERNAL_API_TOKEN` đọc từ Secrets Manager. Service: `data-collector
   `/v1/metrics` có `data-collector.process` (p95, error_rate…), `/v1/events?trace_id=`.
 - Cảnh báo mới (`/v1/alerts`, webhook nếu có): `data_run_incomplete`, `data_run_failed`, `data_document_failed`,
   `data_sqs_retry`. `slow_stage` chỉ áp dụng cho `process` của pipeline (cả lượt full chạy nhiều giờ là bình thường).
-- **Worker giữ nguyên:** sự kiện pipeline không có `job_id/runtime_id/...` nên `job_scoped()` = false → không bao giờ
-  được chuyển sang worker/DynamoDB. Luồng monitoring → worker của hợp đồng không đổi.
 - Monitoring không chạy (hoặc `DATA_MONITORING_URL` rỗng): pipeline vẫn chạy, log terminal/journald đầy đủ.
 
 **Log trên terminal (mọi service, `monitoring/logging.py`).** `LOG_FORMAT=auto` (mặc định): chạy trong terminal → dòng

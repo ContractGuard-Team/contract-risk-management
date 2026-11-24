@@ -15,6 +15,7 @@ import time
 from uuid import uuid4
 from fastapi import Request, HTTPException
 from fastapi.responses import JSONResponse
+from common.exceptions import JobCancelled
 from common.service_client import call_key
 from common.service_http import base_app, read_json, identity
 from monitoring.client import emit
@@ -68,6 +69,18 @@ class JobStore:
         return {"key": key, "identity": payload["identity"], "status": row["status"], "stage": row["stage"],
                 "progress": row["progress"], "attempts": row["attempts"], "error_type": row["error_type"],
                 "result": json.loads(row["result"]) if row["result"] is not None else None}
+
+    def cancel(self, key):
+        """Stop a queued or running job for good; a finished one is left as it is."""
+        with self.lock, self.db:
+            self.db.execute("UPDATE jobs SET status='cancelled',stage='cancelled',updated=? "
+                            "WHERE key=? AND status IN ('queued','running')", (self.clock(), key))
+        return self.get(key)
+
+    def cancelled(self, key):
+        with self.lock:
+            row = self.db.execute("SELECT status FROM jobs WHERE key=?", (key,)).fetchone()
+        return row is not None and row["status"] == "cancelled"
 
     def claim(self):
         now, owner = self.clock(), uuid4().hex
@@ -124,6 +137,8 @@ class JobRunner:
                     errors.append(exc)
                     return
         def guard():
+            if self.store.cancelled(key):
+                raise JobCancelled("Job was cancelled")
             if errors:
                 raise RuntimeError("Internal lease renewal failed")
             if time.monotonic() - started > maximum:
@@ -138,13 +153,16 @@ class JobRunner:
         heartbeat.start()
         emit(self.service, "job", "started", **payload["identity"])
         try:
-            result = self.handler(payload, progress, guard)
+            result = self._call(key, payload, progress, guard)
             guard()
             if not isinstance(result, dict):
                 raise ValueError("Job result must be a JSON object")
             self.store.update(key, owner, stage="completed", progress=100, status="completed", result=result)
             emit(self.service, "job", "completed", duration_ms=(time.monotonic()-started)*1000, **payload["identity"])
         except Exception as exc:
+            if isinstance(exc, JobCancelled) or self.store.cancelled(key):
+                emit(self.service, "job", "cancelled", duration_ms=(time.monotonic()-started)*1000, **payload["identity"])
+                return
             if type(exc).__name__ == "TransientModelError":  # its message is status/code only (gemini_client.py)
                 log.warning("Job %s failed: %s", key, exc)
             try:
@@ -155,6 +173,25 @@ class JobRunner:
         finally:
             done.set()
             heartbeat.join(timeout=2)
+
+    def _call(self, key, payload, progress, guard):
+        """Run the handler so a cancel frees this runner at once: a handler stuck in a model call or OCR is left
+        behind (its result is discarded, its next guard() stops it) and the next contract starts immediately."""
+        outcome = {}
+        def call():
+            try:
+                outcome["result"] = self.handler(payload, progress, guard)
+            except BaseException as exc:
+                outcome["error"] = exc
+        thread = Thread(target=call, name=self.service + "-handler", daemon=True)
+        thread.start()
+        while thread.is_alive():
+            thread.join(timeout=0.2)
+            if self.store.cancelled(key):
+                raise JobCancelled("Job was cancelled")
+        if "error" in outcome:
+            raise outcome["error"]
+        return outcome["result"]
 
     def _loop(self):
         while not self.stop.is_set():
@@ -206,6 +243,13 @@ def job_app(service, handler, *, validate=lambda _: None, ready=lambda: {}, desc
     @app.get("/v1/jobs/{key}")
     def status(key: str):
         row = store.get(key)
+        if row is None:
+            raise HTTPException(404, "Job not found")
+        return row
+
+    @app.post("/v1/jobs/{key}/cancel")
+    def cancel(key: str):
+        row = store.cancel(key)
         if row is None:
             raise HTTPException(404, "Job not found")
         return row

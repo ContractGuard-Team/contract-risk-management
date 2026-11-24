@@ -1,5 +1,6 @@
 """Process 2: persist ordered progress and Agent 3 output before acknowledging events."""
 import hashlib
+import logging
 import time
 from queue import Empty
 from uuid import uuid4
@@ -12,53 +13,40 @@ from workers.connectors.langfuse import progress_events
 
 class ProgressWorker:
     def __init__(self, store, storage, output_bucket, prefix="results", *, langfuse=None,
-                 poll_seconds=5, max_watch_seconds=39600, inbox=None):
+                 poll_seconds=5, max_watch_seconds=39600):
         self.store, self.storage, self.output_bucket, self.prefix = store, storage, output_bucket, prefix.strip("/")
         self.langfuse, self.poll_seconds, self.max_watch_seconds = langfuse, poll_seconds, max_watch_seconds
         self.stop = Event()
-        self.inbox = inbox
-
-    def drain_monitoring(self):
-        if self.inbox is None:
-            return
-        item = self.inbox.next()
-        if item is None:
-            return
-        event_id, event, attempts = item
-        try:
-            self.store.observe(event)
-        except ValueError:
-            self.inbox.finish(event_id, "rejected")
-            print('{"service":"worker","stage":"monitoring_persist","status":"rejected"}', flush=True)
-        except Exception:
-            self.inbox.retry(event_id, attempts)
-            print('{"service":"worker","stage":"monitoring_persist","status":"retry"}', flush=True)
-        else:
-            self.inbox.finish(event_id)
 
     def handle(self, event):
         if event.get("operation") == "watch":
             return self.watch(event)
         if not self.store.check_event(event):
             return
-        output = None
+        output, result, partner = None, event.get("result"), event.get("partner")
         if event["status"] == "completed":
-            result = event.get("result")
             if not isinstance(result, dict) or result.get("schema_version") != "2.0.0":
                 raise ValueError("Completion requires the workflow's extraction.v2 result")
-            partner = event.get("partner")
-            if partner:  # ContractGuard decides the key; a redelivered job simply overwrites it (§4.6)
+            if partner:
                 from workers.partner import extraction
-                output = self.storage.write_json(self.output_bucket, partner["result_key"],
-                                                 extraction(event, result, partner))
-            else:
-                identity = hashlib.sha256(canonical([event["job_id"], event["runtime_id"]]).encode()).hexdigest()
-                # Attempt-scoped key prevents a stale writer from overwriting a newer attempt's artifact.
-                key = f"{self.prefix}/{identity}/{event['owner']}/extraction.json"
-                output = self.storage.write_json(self.output_bucket, key, {
-                    "job_id": event["job_id"], "runtime_id": event["runtime_id"],
-                    "contract_id": event["contract_id"], "result": result})
+                result = extraction(event, result, partner)
+            output = self._write_result(event, result, partner)
+        elif event["status"] == "failed" and result is not None:
+            try:
+                output = self._write_result(event, result, partner)
+            except Exception as exc:  # the failure must still be logged and reported without its output file
+                logging.getLogger(__name__).error("error output not written: %s", type(exc).__name__)
         self.store.apply(event, output=output)
+
+    def _write_result(self, event, result, partner):
+        if partner:  # ContractGuard decides the key; a redelivered job simply overwrites it (§4.6)
+            return self.storage.write_json(self.output_bucket, partner["result_key"], result)
+        identity = hashlib.sha256(canonical([event["job_id"], event["runtime_id"]]).encode()).hexdigest()
+        # Attempt-scoped key prevents a stale writer from overwriting a newer attempt's artifact.
+        key = f"{self.prefix}/{identity}/{event['owner']}/extraction.json"
+        return self.storage.write_json(self.output_bucket, key, {
+            "job_id": event["job_id"], "runtime_id": event["runtime_id"],
+            "contract_id": event["contract_id"], "result": result})
 
     def watch(self, command):
         if self.langfuse is None:
@@ -111,7 +99,6 @@ class ProgressWorker:
             try:
                 event = requests.get(timeout=0.5)
             except Empty:
-                self.drain_monitoring()
                 continue
             try:
                 self.handle(event)
@@ -119,7 +106,6 @@ class ProgressWorker:
             except Exception as exc:
                 response = {"event_id": event["event_id"], "ok": False, "error_type": type(exc).__name__}
             responses.put(response)
-            self.drain_monitoring()
 
 
 class ProgressChannel:
@@ -163,7 +149,7 @@ class JobEvents:
                  "event_id": uuid4().hex, "stage": stage, "status": status,
                  "progress": next_progress, "details": details or {}, "result": result}
         partner = (getattr(self.job, "info", None) or {}).get("metadata", {}).get("contractguard")
-        if partner and status == "completed":
+        if partner and result is not None:
             event["partner"] = partner  # the writer puts the result at ContractGuard's result_key
         self.sender(event)
         if self.on_emit is not None and status == "running":

@@ -22,25 +22,59 @@ Nhánh đọc Langfuse cũ còn để tương thích caller/test library; không
 entrypoint Compose. Monitoring mới nhận telemetry riêng, không phải kênh hoàn tất job.
 Chi tiết JSON và durable HTTP jobs: [container_interfaces.md](container_interfaces.md).
 
-## Hai bảng DynamoDB tiến độ (ContractJobStore)
+## Hai bảng DynamoDB (ContractJobStore, viết lại 2026-11-24)
 
 Khi có `WORKER_DYNAMODB_EVENTS_TABLE` (Compose mặc định `contract-risk-job-events`), worker dùng
-`workers/runtime/contract_job_store.py`:
+`workers/runtime/contract_job_store.py`. Chỉ worker ghi hai bảng này; monitoring không còn ghi vào DynamoDB.
 
-| Bảng | Khóa | Nội dung |
-| --- | --- | --- |
-| `WORKER_DYNAMODB_TABLE` (jobs) | `job_id = contract:<contract_id>` | Trạng thái hiện tại của hợp đồng: active_job_id, runtime, owner/lease, stage, progress, status, output (bucket/key S3) |
-| `WORKER_DYNAMODB_EVENTS_TABLE` (events) | `job_id` + `event_id` | Lịch sử chỉ-thêm: `registered`, `trace`, `worker:<id>` mỗi phase, `monitoring:<id>` từ monitoring, `completed` (biên nhận) |
+**jobs** — mỗi hợp đồng một dòng, khóa `job_id = contract:<contract_id>`, trả lời "hợp đồng đang ở đâu":
 
-Luồng output Agent 3: LangGraph result → `WorkflowServiceClient` kiểm tra identity/Agent 3 → intake →
-IPC → progress writer ghi S3 trước → một `TransactWriteItems` cập nhật bảng jobs (completed, 100, output)
-và thêm `worker:<id>` + `completed` vào bảng events → ACK → intake đọc lại (consistent) → DeleteMessage.
-S3 lỗi thì không ghi completed (unit test `test_s3_failure_never_completes_or_appends_completion`).
+| `location` | Khi nào |
+| --- | --- |
+| `worker` | vừa nhận, đang tải file, đang lưu kết quả, đã xong |
+| `input_processing` | đang tách/OCR |
+| `langgraph` | đã bàn giao cho LangGraph, chưa vào agent |
+| `agent_1` / `agent_2` / `agent_3` | đang ở agent đó (lấy từ polling LangGraph, agent chạy quá nhanh có thể không kịp hiện) |
 
-Mỗi phase (downloading, dispatching, processing, agent_1/2/3, saving_result, completed) là một transaction
-hai bảng, có điều kiện owner/runtime/sequence/lease. Stage agent lấy từ việc poll LangGraph nên một stage
-rất nhanh có thể không có bản ghi `worker:`; khi `MONITORING_WORKER_ENABLED=true`, event của agent-service
-vẫn được ghi `monitoring:<id>` vào bảng events. E2E (Moto) xác minh 2 bảng ngày 2026-11-07.
+`status`: `queued`, `running`, `retrying` (lần chạy lỗi, SQS sẽ gửi lại), `completed`, `failed`, `cancelled`. Mỗi lần chuyển
+bước, `status/location/stage/progress/details` bị ghi đè toàn bộ nên log cũ mất. Xong việc thì dòng giữ nguyên cho tới khi có
+job khác cùng `contract_id` (khác `active_job_id`): lúc đó cả dòng được thay mới.
+
+**events** — khóa `job_id` + `event_id="outcome"`, tối đa một log cho mỗi job, chỉ ghi khi: `completed` (kèm `output`),
+`failed` (lỗi đầu vào, hoặc hết số lần thử; kèm `location`, `error_type`, `reason`, `attempts`, `output`), `cancelled` (kèm
+`location`). Đang chạy hoặc đang thử lại thì không ghi gì. Job `failed` mà cùng `job_id` được gửi lại và chạy xong thì log
+được thay bằng kết cục mới. `completed` và `cancelled` không ghi đè nhau (điều kiện ngay trên dòng log).
+
+Thứ tự lưu giữ nguyên: S3 → một transaction (dòng jobs + log outcome) → trả lời queue kết quả → xóa message SQS.
+Dòng cũ trong bảng events (`registered`, `trace`, `worker:*`, `monitoring:*`) không còn được đọc, trừ biên nhận `completed` cũ;
+xóa tay nếu muốn bảng gọn.
+
+## Cancel, lỗi và output lỗi (2026-11-24)
+
+Bản gửi ContractGuard: [partner_cancel_and_failure.md](partner_cancel_and_failure.md); sửa giao thức thì sửa cả hai.
+
+**Cancel** — `ContractJobStore.cancel(job_id)`, gọi từ `workers/cancel.py` theo hai đường:
+
+| Đường | Cách gọi |
+| --- | --- |
+| SQS (cho nút cancel của ContractGuard) | `WORKER_CANCEL_QUEUE_URL`, message `{"message_version":"1","event_type":"cancel_requested","job_id":"..."}` |
+| HTTP nội bộ | `POST worker:8000/v1/jobs/<job_id>/cancel`, `Authorization: Bearer INTERNAL_API_TOKEN` → `{"status": "cancelled" \| "completed" \| "failed"}` |
+
+Phải là queue riêng: queue yêu cầu chỉ được đọc giữa hai hợp đồng nên message cancel sẽ tới quá trễ. Role worker cần
+`sqs:ReceiveMessage` + `sqs:DeleteMessage` trên queue cancel. Tên message và mã `ERR-AI-003` là tạm, chờ đối tác chốt.
+
+Diễn biến: log `cancelled` được ghi ngay → worker kiểm mỗi giây, dừng → gọi `POST /v1/jobs/<key>/cancel` của service đang chạy,
+LangGraph tự hủy tiếp job ở agent → runner bỏ lại lời gọi model/OCR đang treo (kết quả bị vứt, dừng ở `guard` kế tiếp, không
+gọi model thêm) và nhận việc mới ngay → queue kết quả nhận `failed` + `ERR-AI-003` (giao thức chưa có event `cancelled`) →
+xóa message → hợp đồng kế tiếp. Cancel trước khi message tới: message tới là bị trả lời và xóa, không chạy. Đã xong: không đổi gì.
+File `quarantine/` giữ nguyên khi cancel hoặc lỗi.
+
+**Lỗi** — lỗi đầu vào dừng ngay; lỗi khác để SQS gửi lại, lần nhận thứ 3 vẫn lỗi thì dừng (`MAX_RECEIVES`), áp dụng cả message
+nội bộ. Khi dừng: ghi output lỗi ra S3 (`result_key`; message nội bộ: prefix kết quả) → log `failed` → message `failed`
+(`failure_reason`, `error_code`) lên queue kết quả → xóa message. Output lỗi = `error_result()` trong
+`common/schemas/business/outbound.py`: đủ mọi khóa của `AnalysisResult`, mục không có là `null`, `document_complete=false`.
+Backend chỉ đọc `result_key` sau `completed` nên file này không bị hiểu là kết quả. Request sai tới mức không đọc được
+`result_key` thì chỉ có log và message `failed`.
 
 ## Kết nối ContractGuard (2026-11-15, mới nhất)
 
@@ -73,7 +107,7 @@ Vòng xử lý:
    → `failed` + `ERR-AI-001`, xóa message ngay. Lỗi khác, kể cả ValueError nội bộ (LangGraph/Agent 3 trả kết quả không
    hợp lệ) → giữ message cho SQS gửi lại; tới lần nhận thứ 3 → `failed` + `ERR-AI-002`, xóa message.
    Job đã `completed` trong DynamoDB thì **không bao giờ** gửi `failed`: giữ message để lần giao lại gửi lại `completed`.
-   Xóa file `quarantine/` lỗi chỉ ghi log, không chặn ACK. `failure_reason` không chứa nội dung hợp đồng.
+   Xóa file `quarantine/` lỗi chỉ ghi log, không chặn ACK. `failure_reason` không chứa nội dung hợp đồng (lỗi service: `Remote job failed: <loại lỗi>`).
 6. Message trùng sau khi đã xong → gửi lại `completed`, xóa quarantine (idempotent), không chạy lại 3 agent.
 
 Mọi message gửi lên queue kết quả qua `check_outbound` (đúng bộ trường §3 theo `event_type`, chuỗi không rỗng,

@@ -28,9 +28,9 @@ class WorkerSettings:
     shutdown_seconds: int = 45
     max_job_seconds: int = 39600
     events_table_name: str = ""
-    data_dir: str = "/data"
     results_queue_url: str = ""  # ContractGuard analysis-results queue: enables workers/partner.py
     chat_queue_url: str = ""  # ContractGuard chat-requests queue: enables workers/chat.py
+    cancel_queue_url: str = ""  # optional queue of cancel_requested messages (workers/cancel.py)
     chat_url: str = ""  # agent-3, which answers chat questions (POST /v1/chat)
 
     def __post_init__(self):
@@ -50,6 +50,8 @@ class WorkerSettings:
             raise ValueError("Jobs and events must use distinct DynamoDB tables")
         if self.results_queue_url and (not self.input_bucket or self.output_bucket != self.input_bucket):
             raise ValueError("ContractGuard mode: WORKER_INPUT_BUCKET and WORKER_OUTPUT_BUCKET must both be its bucket")
+        if self.cancel_queue_url and not self.events_table_name:
+            raise ValueError("WORKER_CANCEL_QUEUE_URL needs WORKER_DYNAMODB_EVENTS_TABLE")
         if self.chat_queue_url and (not self.results_queue_url or not self.chat_url):
             raise ValueError("WORKER_CHAT_QUEUE_URL needs WORKER_RESULTS_QUEUE_URL and WORKER_CHAT_URL")
 
@@ -70,7 +72,7 @@ class WorkerSettings:
     def from_env(cls):
         values = {}
         names = {"queue_url": "WORKER_SQS_QUEUE_URL", "table_name": "WORKER_DYNAMODB_TABLE",
-                 "events_table_name": "WORKER_DYNAMODB_EVENTS_TABLE", "data_dir": "DATA_DIR",
+                 "events_table_name": "WORKER_DYNAMODB_EVENTS_TABLE",
                  "output_bucket": "WORKER_OUTPUT_BUCKET", "input_bucket": "WORKER_INPUT_BUCKET",
                  "region": "AWS_REGION", "output_prefix": "WORKER_OUTPUT_PREFIX",
                  "input_processing_url": "WORKER_INPUT_PROCESSING_URL",
@@ -79,7 +81,7 @@ class WorkerSettings:
                  "langfuse_base_url": "WORKER_LANGFUSE_BASE_URL",
                  "langfuse_public_key": "WORKER_LANGFUSE_PUBLIC_KEY", "langfuse_secret_key": "WORKER_LANGFUSE_SECRET_KEY",
                  "results_queue_url": "WORKER_RESULTS_QUEUE_URL",
-                 "chat_queue_url": "WORKER_CHAT_QUEUE_URL", "chat_url": "WORKER_CHAT_URL"}
+                 "cancel_queue_url": "WORKER_CANCEL_QUEUE_URL", "chat_queue_url": "WORKER_CHAT_QUEUE_URL", "chat_url": "WORKER_CHAT_URL"}
         for field, env in names.items():
             value = os.environ.get(env, "").strip()
             if value:

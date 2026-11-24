@@ -38,6 +38,14 @@ class AnalysisRequested(Received):
         return self
 
 
+class CancelRequested(Received):
+    """The user pressed cancel (WORKER_CANCEL_QUEUE_URL, workers/cancel.py).
+    shortcut: our own message shape until ContractGuard defines one; change it here only."""
+    message_version: Literal["1"]
+    event_type: Literal["cancel_requested"]
+    job_id: JobId
+
+
 InboundMessage = TypeAdapter(Annotated[Union[Ping, AnalysisRequested], Field(discriminator="event_type")])
 
 

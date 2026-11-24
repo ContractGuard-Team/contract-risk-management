@@ -82,6 +82,19 @@ class JobStore:
             condition="#o=:owner AND (attribute_not_exists(trace_id) OR trace_id=:trace)",
             names={"#o": "owner"}, values={":owner": owner, ":trace": trace_id})
 
+    def completed(self, job_id):
+        return (self.client.get(job_id) or {}).get("status") == "completed"
+
+    # Cancel and the final-outcome log need the events table (ContractJobStore).
+    def cancelled(self, job_id):
+        return False
+
+    def mark_cancelled(self, job_id):
+        pass
+
+    def record_failure(self, job_id, contract_id, details):
+        pass
+
     def assert_owned(self, identity):
         row = self.client.get(identity["job_id"])
         if (not row or row.get("runtime_id") != identity["runtime_id"]

@@ -22,12 +22,6 @@ def make_store(settings):
     return JobStore(DynamoDBClient(settings.table_name, region=settings.region))
 
 
-def make_inbox(data_dir):
-    from pathlib import Path
-    from workers.runtime.monitoring_inbox import MonitoringInbox
-    return MonitoringInbox(Path(data_dir) / "monitoring-inbox.sqlite3")
-
-
 def _initialize_child():
     # Parent owns graceful shutdown; children finish the in-flight job within its grace period.
     signal.signal(signal.SIGINT, signal.SIG_IGN)
@@ -37,14 +31,8 @@ def _initialize_child():
 
 def progress_process(settings, requests, responses, stop):
     _initialize_child()
-    store = make_store(settings)
-    inbox = make_inbox(settings.data_dir) if settings.events_table_name else None
-    try:
-        ProgressWorker(store, S3Client(region=settings.region), settings.output_bucket,
-                       settings.output_prefix, inbox=inbox).serve(requests, responses, stop)
-    finally:
-        if inbox:
-            inbox.close()
+    ProgressWorker(make_store(settings), S3Client(region=settings.region), settings.output_bucket,
+                   settings.output_prefix).serve(requests, responses, stop)
 
 
 def intake_process(settings, requests, responses, stop):
@@ -85,9 +73,10 @@ def run(settings):
     settings.validate_connections()
     if not settings.langgraph_url:
         raise ValueError("WORKER_LANGGRAPH_URL is required by the container entrypoint")
+    store = make_store(settings)
     if settings.events_table_name:
-        make_store(settings).tables.validate_schema()
-    from threading import Thread
+        store.tables.validate_schema()
+    from threading import Event, Thread
     import uvicorn
     from common.service_http import base_app
     context = multiprocessing.get_context("spawn")
@@ -120,10 +109,13 @@ def run(settings):
             raise RuntimeError("Worker child process unavailable")
         return {"mode": "sqs", "processes": [p.name for p in children]}
     app = base_app("worker", ready=readiness)
-    inbox = make_inbox(settings.data_dir) if settings.events_table_name else None
-    if inbox:
-        from workers.runtime.monitoring_inbox import attach_ingress
-        attach_ingress(app, inbox)
+    cancel_stop, cancel_thread = Event(), None
+    if settings.events_table_name:
+        from workers import cancel
+        cancel.attach(app, store)
+        if settings.cancel_queue_url:
+            cancel_thread = Thread(target=cancel.serve_queue, name="cancel-queue", daemon=True, args=(
+                SQSClient(settings.cancel_queue_url, region=settings.region), store, cancel_stop))
     server = uvicorn.Server(uvicorn.Config(app, host="0.0.0.0", port=8000, access_log=False, log_config=None))
     server_thread = Thread(target=server.run, daemon=True)
     try:
@@ -131,6 +123,8 @@ def run(settings):
             process.start()
             children.append(process)
         server_thread.start()
+        if cancel_thread:
+            cancel_thread.start()
         while not shutdown_requested:
             if not all(process.is_alive() for process in children):
                 failed = True
@@ -138,6 +132,7 @@ def run(settings):
             time.sleep(0.5)
     finally:
         server.should_exit = True
+        cancel_stop.set()
         intake_stop.set()
         chat_stop.set()
         deadline = time.monotonic() + settings.shutdown_seconds
@@ -166,8 +161,6 @@ def run(settings):
             signal.signal(sig, handler)
         if server_thread.is_alive():
             server_thread.join(timeout=5)
-        if inbox and not server_thread.is_alive():
-            inbox.close()
     return 1 if failed else 0
 
 
@@ -200,13 +193,7 @@ def main(argv=None):
         def idle_app():
             from monitoring.client import emit
             emit("worker", "service", "idle")
-            app = base_app("worker", ready=lambda: {"mode": "idle", "sqs_polling": False})
-            if os.getenv("WORKER_DYNAMODB_EVENTS_TABLE"):
-                from workers.runtime.monitoring_inbox import attach_ingress
-                inbox = make_inbox(os.getenv("DATA_DIR", "/data"))
-                app.state.monitoring_inbox = inbox
-                attach_ingress(app, inbox)
-            return app
+            return base_app("worker", ready=lambda: {"mode": "idle", "sqs_polling": False})
         serve(idle_app, "worker")
         return 0
     settings = WorkerSettings.from_env()

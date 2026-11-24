@@ -10,8 +10,7 @@ from threading import Event, RLock, Thread
 from fastapi import Request, HTTPException
 from common.service_http import base_app, serve, read_json
 from monitoring.client import FIELDS
-from monitoring.langfuse_exporter import LangfuseExporter
-from monitoring.worker_exporter import WorkerExporter, job_scoped
+from monitoring.langfuse_exporter import LangfuseExporter, LangfuseRejected, LangfuseUnavailable
 from monitoring import alerts as alert_rules
 from monitoring.metrics import summarize
 from monitoring.tracing import timeline
@@ -20,6 +19,9 @@ import time
 
 SERVICES = {"worker", "input-processing", "agent-1", "agent-2", "agent-3", "langgraph", "monitoring", "config", "mcp",
             "data-collector", "data-processor"}  # data pipeline runs on the host (systemd), posts via 127.0.0.1
+
+
+EXPORT_INTERVAL, EXPORT_RETRY = 2, 5  # seconds between export rounds / after a failed one
 
 
 def sanitize(event):
@@ -55,18 +57,14 @@ class EventStore:
         self.db.execute("PRAGMA journal_mode=WAL")
         with self.db:
             self.db.execute("CREATE TABLE IF NOT EXISTS events (id TEXT PRIMARY KEY, service TEXT, trace_id TEXT, payload TEXT, exported INTEGER DEFAULT 0)")
-            columns = {row[1] for row in self.db.execute("PRAGMA table_info(events)")}
-            if "worker_exported" not in columns:
-                # Existing telemetry is historical. Never replay local fixtures to AWS on upgrade.
-                self.db.execute("ALTER TABLE events ADD COLUMN worker_exported INTEGER NOT NULL DEFAULT 1")
             self.db.execute("""CREATE TABLE IF NOT EXISTS alerts (key TEXT PRIMARY KEY, payload TEXT NOT NULL,
                 created_ns INTEGER NOT NULL, delivered INTEGER NOT NULL DEFAULT 0)""")
 
     def add(self, event):
         event = sanitize(event)
         with self.lock, self.db:
-            inserted = self.db.execute("INSERT OR IGNORE INTO events(id,service,trace_id,payload,worker_exported) VALUES(?,?,?,?,?)",
-                (event["event_id"], event["service"], event.get("trace_id"), json.dumps(event), 0 if job_scoped(event) else 1)).rowcount
+            inserted = self.db.execute("INSERT OR IGNORE INTO events(id,service,trace_id,payload) VALUES(?,?,?,?)",
+                (event["event_id"], event["service"], event.get("trace_id"), json.dumps(event))).rowcount
             if inserted:  # replayed events never re-alert
                 for alert in alert_rules.evaluate(event, count_recent_throttles=self.count_throttles):
                     if self.db.execute("INSERT OR IGNORE INTO alerts(key,payload,created_ns) VALUES(?,?,?)",
@@ -96,8 +94,8 @@ class EventStore:
         """Drop telemetry older than the retention window, never rows still waiting for an exporter."""
         cutoff = time.time_ns() - int(retention_days * 86400 * 1_000_000_000)
         with self.lock, self.db:
-            events = self.db.execute("DELETE FROM events WHERE json_extract(payload,'$.timestamp_ns')<? AND worker_exported=1 "
-                                     "AND (exported=1 OR ?=0)", (cutoff, int(langfuse_active))).rowcount
+            events = self.db.execute("DELETE FROM events WHERE json_extract(payload,'$.timestamp_ns')<? "
+                                     "AND (exported<>0 OR ?=0)", (cutoff, int(langfuse_active))).rowcount
             self.db.execute("DELETE FROM alerts WHERE created_ns<? AND (delivered=1 OR ?=0)", (cutoff, int(webhook_active)))
         return events
 
@@ -109,20 +107,23 @@ class EventStore:
                 rows = self.db.execute("SELECT payload FROM events ORDER BY rowid DESC LIMIT 1000").fetchall()
         return [json.loads(row[0]) for row in reversed(rows)]
 
+    def pending(self):
+        with self.lock:
+            return self.db.execute("SELECT count(*) FROM events WHERE exported=0").fetchone()[0]
+
     def metrics(self, window_minutes=60):
+        pending = self.pending()
         with self.lock:
             counts = dict(self.db.execute("SELECT service,count(*) FROM events GROUP BY service"))
-            pending = self.db.execute("SELECT count(*) FROM events WHERE exported=0").fetchone()[0]
-            pending_worker = self.db.execute("SELECT count(*) FROM events WHERE worker_exported=0").fetchone()[0]
             # shortcut: aggregates the newest 50k events in Python; add indexed columns if volume outgrows this.
             recent = [json.loads(r[0]) for r in self.db.execute("SELECT payload FROM events ORDER BY rowid DESC LIMIT 50000")]
-        return {"events_by_service": counts, "pending_export": pending, "pending_worker_export": pending_worker,
+        return {"events_by_service": counts, "pending_export": pending,
                 **summarize(recent, now_ns=time.time_ns(), window_minutes=window_minutes)}
 
 
 def create_app():
     store = EventStore(Path(os.getenv("DATA_DIR", "/data")) / "events.sqlite3")
-    exporter, worker_exporter, stop = LangfuseExporter(), WorkerExporter(), Event()
+    exporter, stop = LangfuseExporter(), Event()
     notifier = alert_rules.WebhookNotifier()
     retention_days = float(os.getenv("MONITORING_RETENTION_DAYS", "30"))
     def maintenance_loop():
@@ -139,63 +140,58 @@ def create_app():
                 last_purge = time.monotonic()
                 removed = store.purge(retention_days, langfuse_active=exporter.active, webhook_active=notifier.active)
                 print(json.dumps({"service": "monitoring", "stage": "retention", "status": "completed", "removed": removed}), flush=True)
-    def worker_loop():
-        while not stop.wait(1):
-            if not worker_exporter.active:
-                continue
-            with store.lock:
-                rows = store.db.execute("SELECT id,payload FROM events WHERE worker_exported=0 ORDER BY rowid LIMIT 100").fetchall()
-            for event_id, payload in rows:
-                if stop.is_set():
-                    break
-                try:
-                    worker_exporter.export(json.loads(payload))
-                    with store.lock, store.db:
-                        store.db.execute("UPDATE events SET worker_exported=1 WHERE id=?", (event_id,))
-                except Exception:
-                    print('{"service":"monitoring","stage":"worker_export","status":"retry"}', flush=True)
-                    stop.wait(2)
-                    break
+    def report(error):
+        """One log line per distinct Langfuse problem (and one when it clears), never one per retry."""
+        if error != exporter.error:
+            exporter.error = error
+            print(json.dumps({"service": "monitoring", "stage": "langfuse_export",
+                              "status": "retry" if error else "recovered", "error": error}), flush=True)
+    def mark(event_id, exported):  # 1 = accepted by Langfuse, 2 = rejected for good
+        with store.lock, store.db:
+            store.db.execute("UPDATE events SET exported=? WHERE id=?", (exported, event_id))
+    if not exporter.active:
+        print(json.dumps({"service": "monitoring", "stage": "langfuse_export", "status": "inactive", "error": exporter.error}), flush=True)
     def export_loop():
-        while not stop.wait(2):
+        while not stop.wait(EXPORT_INTERVAL):
             if not exporter.active:
                 continue
             with store.lock:
-                rows = store.db.execute("SELECT id,payload FROM events WHERE exported=0 LIMIT 100").fetchall()
+                rows = store.db.execute("SELECT id,payload FROM events WHERE exported=0 ORDER BY rowid LIMIT 100").fetchall()
             for event_id, payload in rows:
                 if stop.is_set():
                     break
                 try:
                     exporter.export(json.loads(payload))
-                    with store.lock, store.db:
-                        store.db.execute("UPDATE events SET exported=1 WHERE id=?", (event_id,))
-                except Exception:
-                    # Keep outbox rows for retry; never print remote response bodies.
-                    print('{"service":"monitoring","stage":"langfuse_export","status":"retry"}', flush=True)
-                    stop.wait(5)
+                    mark(event_id, 1)
+                    report(None)
+                except (LangfuseRejected, KeyError, ValueError, TypeError) as exc:  # this event only: go on with the next
+                    reason = str(exc) if isinstance(exc, LangfuseRejected) else type(exc).__name__
+                    print(json.dumps({"service": "monitoring", "stage": "langfuse_export", "status": "rejected",
+                                      "event_id": event_id, "error": reason}), flush=True)
+                    mark(event_id, 2)
+                except Exception as exc:  # outage/keys: keep the outbox for later; remote bodies are never printed
+                    report(str(exc) if isinstance(exc, LangfuseUnavailable) else type(exc).__name__)
+                    stop.wait(EXPORT_RETRY)
                     break
     thread = Thread(target=export_loop, daemon=True)
-    worker_thread = Thread(target=worker_loop, daemon=True)
     maintenance_thread = Thread(target=maintenance_loop, daemon=True)
     @asynccontextmanager
     async def lifespan(app):
         from monitoring.client import emit
         store.add(emit("monitoring", "service", "started"))
         thread.start()
-        worker_thread.start()
         maintenance_thread.start()
         yield
         stop.set()
         thread.join(timeout=15)
-        worker_thread.join(timeout=20)
         maintenance_thread.join(timeout=15)
-        if not any(t.is_alive() for t in (thread, worker_thread, maintenance_thread)):
+        if not any(t.is_alive() for t in (thread, maintenance_thread)):
             exporter.close()
-            worker_exporter.close()
             notifier.close()
             store.db.close()
-    app = base_app("monitoring", lifespan=lifespan, ready=lambda: {"langfuse_active": exporter.active, "worker_forwarding": worker_exporter.active,
-                                                            "alert_webhook": notifier.active, "retention_days": retention_days})
+    app = base_app("monitoring", lifespan=lifespan, ready=lambda: {
+        "langfuse_active": exporter.active, "langfuse_error": exporter.error, "langfuse_pending": store.pending(),
+        "alert_webhook": notifier.active, "retention_days": retention_days})
     @app.post("/v1/events")
     async def event(request: Request):
         value = await read_json(request, maximum=16 * 1024)

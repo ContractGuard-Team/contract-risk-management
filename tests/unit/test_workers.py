@@ -215,11 +215,11 @@ class WorkerAWSTests(unittest.TestCase):
         deleted.assert_not_called()
         self.assertEqual(len(self.submissions), 1)
 
-    def test_empty_document_retains_message(self):
+    def test_empty_document_fails_at_once_and_is_removed(self):
         self.s3.put_object(Bucket="input-contracts", Key=BODY["source_file_key"], Body=b"")
-        with patch.object(self.queue, "delete") as deleted, self.assertRaises(ValueError):
-            self.worker().handle(self.message())
-        deleted.assert_not_called()
+        with patch.object(self.queue, "delete") as deleted:
+            self.assertEqual(self.worker().handle(self.message()), "failed")
+        deleted.assert_called_once()
         self.assertEqual(self.ddb.get(BODY["job_id"])["status"], "failed")
 
     def test_heartbeat_extends_visibility_and_lease(self):
@@ -268,7 +268,7 @@ class WorkerAWSTests(unittest.TestCase):
             self.worker().handle(self.message())
         deleted.assert_not_called()
         row = self.ddb.get(BODY["job_id"])
-        self.assertEqual(row["status"], "failed")
+        self.assertEqual(row["status"], "retrying")
         self.assertNotIn("output", row)
 
     def test_trace_timeout_never_marks_complete(self):

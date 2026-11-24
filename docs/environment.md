@@ -74,7 +74,7 @@ secret mã hóa bằng KMS key riêng cần thêm `kms:Decrypt`.
 
 ## Langfuse
 
-LANGFUSE_ENABLED=false mặc định. Khi bật và đủ LANGFUSE_PUBLIC_KEY/SECRET_KEY/BASE_URL,
+LANGFUSE_ENABLED=true mặc định (local qua init_env.py: false). Khi bật và đủ LANGFUSE_PUBLIC_KEY/SECRET_KEY/BASE_URL,
 monitoring export OTLP HTTP JSON. Thiếu keys vẫn lưu telemetry nội bộ và báo
 langfuse_active=false. Không cài Langfuse Server hoặc SDK trong agent.
 

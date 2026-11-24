@@ -72,7 +72,7 @@ MODEL_PROVIDER=gemini
 AWS_REGION=ap-southeast-1
 API_KEYS_SECRET_ID=contract-risk/prod/api-keys
 WORKER_ENABLED=false
-MONITORING_WORKER_ENABLED=true
+LANGFUSE_ENABLED=true
 WORKER_DYNAMODB_TABLE=contract-risk-jobs
 WORKER_DYNAMODB_EVENTS_TABLE=contract-risk-job-events
 HF_HUB_OFFLINE=1
@@ -87,6 +87,7 @@ Tạm để worker idle nhằm kiểm tra các service trước khi nhận job; 
 | Queue hợp đồng | `WORKER_SQS_QUEUE_URL`, `WORKER_RESULTS_QUEUE_URL` |
 | S3 hợp đồng | `WORKER_INPUT_BUCKET`, `WORKER_OUTPUT_BUCKET`, `WORKER_OUTPUT_PREFIX` |
 | DynamoDB | `WORKER_DYNAMODB_TABLE`, `WORKER_DYNAMODB_EVENTS_TABLE` |
+| Cancel (tùy chọn) | `WORKER_CANCEL_QUEUE_URL` — xem [workers.md](workers.md) |
 | MCP/RAG | `MCP_S3_BUCKETS`, `QDRANT_COLLECTION`, `EMBEDDING_MODEL`, `EMBEDDING_DIMENSIONS`, `RAG_RERANK_MODEL` |
 | Monitoring | `MONITORING_HOST_PORT`, `DATA_MONITORING_URL`, `LANGFUSE_ENABLED`, `LANGFUSE_BASE_URL` |
 | Data pipeline | `DATA_SQS_QUEUE_URL`, `DATA_S3_BUCKET`, `DATA_S3_PREFIX`, các biến mục 9 của `.env.example` |
@@ -118,7 +119,8 @@ IAM role và quyền cross-account cần phù hợp các thao tác code thực s
 | SQS requests | Nhận message, gia hạn visibility, xóa sau khi hoàn tất |
 | SQS results | Gửi progress/completed/failed/pong |
 | S3 hợp đồng | Đọc request/source; ghi clean/result; xóa source trong quarantine sau hoàn tất |
-| DynamoDB jobs/events | Đọc và ghi trạng thái/lease, thêm event |
+| SQS cancel (nếu dùng) | Nhận và xóa message |
+| DynamoDB jobs/events | Đọc và ghi trạng thái/lease; đọc, thêm, thay log kết cục |
 | S3 tham chiếu qua MCP | List/Get; connector này chỉ đọc |
 | Data pipeline | Nhận/xóa/gia hạn queue cập nhật; ghi file gốc vào bucket tham chiếu |
 
@@ -126,8 +128,8 @@ Hai bảng DynamoDB phải có schema:
 
 | Bảng | Partition key | Sort key | Cách lưu |
 | --- | --- | --- | --- |
-| `contract-risk-jobs` | `job_id` String | Không có | Trạng thái hiện tại theo job, có runtime/lease |
-| `contract-risk-job-events` | `job_id` String | `event_id` String | Lịch sử thêm mới, không reset theo trạng thái hiện tại |
+| `contract-risk-jobs` | `job_id` String | Không có | Một dòng mỗi hợp đồng: đang ở đâu, trạng thái gì |
+| `contract-risk-job-events` | `job_id` String | `event_id` String | Một log kết cục mỗi job: completed, failed hoặc cancelled |
 
 IAM policy tham khảo nằm trong `infrastructure/aws/`; chúng không thay toàn bộ quyền worker/cross-account của môi trường. `preflight.sh` kiểm STS và list bucket tham chiếu từ container, không chứng minh mọi quyền S3/SQS/DynamoDB hay quyền gọi OpenAI đã đúng.
 
@@ -202,7 +204,7 @@ Việc bật worker bắt đầu nhận những message đang có trong requests
 2. Gửi yêu cầu phân tích đúng schema; worker đọc `request.json`/source từ S3.
 3. Trạng thái đi qua processing, Agent 1, Agent 2, Agent 3 và saving_result; cùng `job_id`/runtime xuất hiện trong monitoring.
 4. S3 có `extraction.json` đúng `result_key` và bản clean đúng request. `AnalysisResult` có output tổng hợp, findings, recommendations và scoring theo schema.
-5. DynamoDB jobs phản ánh trạng thái cuối; events giữ lịch sử. Backend nhận `completed`; worker mới ACK/xóa message requests sau các bước lưu/hoàn tất.
+5. DynamoDB jobs phản ánh trạng thái cuối; events có đúng một log `completed` của job. Langfuse có trace của job (`docker compose exec monitoring python -m monitoring.langfuse_exporter` nếu không thấy). Backend nhận `completed`; worker mới ACK/xóa message requests sau các bước lưu/hoàn tất.
 6. Thử lỗi đầu vào có kiểm soát để kiểm thông báo `failed`/DLQ; không đưa dữ liệu nhạy cảm vào log hoặc commit.
 
 Xem [workers.md](workers.md) và [container_interfaces.md](container_interfaces.md) về schema, retry và giới hạn. Chỉ chạy các bài Moto/fixture trong môi trường thử riêng; không chạy `container_smoke.py` vào stack production.

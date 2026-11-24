@@ -1,4 +1,32 @@
-# Langfuse + Monitoring — ghi chú bàn giao (2026-11-07)
+# Langfuse + Monitoring — ghi chú bàn giao
+
+## Không thấy log trên Langfuse (2026-11-24, đọc trước)
+
+Kiểm ngay trên EC2 bằng một lệnh; nó gửi một event thử và in đúng lý do Langfuse trả lời (không in key):
+
+```bash
+docker compose exec monitoring python -m monitoring.langfuse_exporter
+```
+
+| `error` | Cách sửa |
+| --- | --- |
+| `LANGFUSE_ENABLED is false` | `.env`: `LANGFUSE_ENABLED=true` rồi `docker compose up -d monitoring` |
+| `Empty LANGFUSE_PUBLIC_KEY...` | thêm key vào secret `contract-risk/prod/api-keys` |
+| `HTTP 401/403` | key sai hoặc `LANGFUSE_BASE_URL` khác vùng của key (EU cloud / US us.cloud / JP jp.cloud) |
+| `ConnectError: cannot reach` | EC2 không ra được Internet tới Langfuse |
+| `langfuse_ok: true` | Langfuse nhận được: trên dashboard chọn đúng project và Environment = `APP_ENV` (`production`), tìm Session = job_id |
+
+Nguyên nhân tìm thấy trong code/hướng dẫn: `.env.example` và Compose mặc định `LANGFUSE_ENABLED=false`, hướng dẫn EC2 tạo `.env`
+từ đó mà không nhắc bật; lỗi gửi chỉ in `retry`, không có mã; một event bị từ chối chặn mọi event phía sau; mọi mã khác 200 đều
+bị coi là lỗi; worker không gửi event khi job hỏng trước bước processing. Đã sửa: mặc định bật (`init_env.py` local vẫn tắt);
+`/readyz` của monitoring có `langfuse_active`, `langfuse_error`, `langfuse_pending`; event bị từ chối (400/413/422) được đánh dấu
+`exported=2` và bỏ qua; 401/5xx/mất mạng thì giữ lại và gửi sau; `deploy.sh` chạy lệnh kiểm ở cuối. Event đã nằm trong outbox
+(tối đa `MONITORING_RETENTION_DAYS`) sẽ được gửi bù khi bật. `cancelled` là span mức WARNING.
+
+Chưa xác nhận trên EC2 của người dùng (không truy cập được máy, secret và `.env` ở đó). Mục "Monitoring → worker" bên dưới
+là lịch sử: `worker_exporter.py`, `monitoring_inbox.py`, `MONITORING_WORKER_ENABLED` đã xóa vì ghi loạn bảng DynamoDB.
+
+## Ghi chú 2026-11-07
 
 Đọc file này trước khi làm tiếp phần giám sát/Langfuse. Không ghi key vào đây hay bất kỳ file tracked nào.
 

@@ -44,7 +44,7 @@ LangGraph chuyển context giữa các agent; các container agent không import
 | Agent 3 | Đề xuất giảm thiểu/chỉnh sửa, đọc tài liệu gốc qua `partner_document` khi cần; đối chiếu findings của Agent 2 |
 | LangGraph | Thứ tự chạy, handoff, retry lỗi tạm thời, cache/resume, dọn memory ngắn hạn; tính điểm tất định và dựng `AnalysisResult` |
 | MCP | Tool gateway cho Agent 2/3; RAG pháp luật, Qdrant, Supabase, PostgreSQL tùy chọn, Tavily và đọc S3 |
-| Monitoring | Sự kiện HTTP, log JSON, SQLite/outbox, metrics/alerts; chuyển tiến độ cho worker; Langfuse OTLP tùy chọn |
+| Monitoring | Sự kiện HTTP, log JSON, SQLite/outbox, metrics/alerts; gửi log sang Langfuse (OTLP) |
 | Config | Cấp secret theo token và allowlist của từng service từ AWS Secrets Manager |
 
 Model provider (thử nghiệm từ 2026-11-23) dùng **Gemini API** `generateContent` qua REST (`integrations/external/gemini_client.py`). Mặc định trong `config.yaml`: cả 3 agent `gemini-3.5-flash-lite`; ghi đè bằng `AGENT_1_MODEL`, `AGENT_2_MODEL`, `AGENT_3_MODEL` hoặc `GEMINI_MODEL`. Key chỉ lấy từ `GEMINI_API_KEY` trong root `.env` (gitignored), không qua Secrets Manager và không ghi trong code. Ba agent xử lý hợp đồng tiếng Việt, tiếng Anh hoặc song ngữ; lời giải thích theo `request.output_language` (`vi`/`en`), trích dẫn giữ nguyên văn. Đây là cấu hình repository; quyền truy cập model cần kiểm tra bằng tài khoản triển khai.
@@ -123,7 +123,7 @@ Source Hermes upstream được giữ nguyên. `__init__.py` rỗng là dấu pa
 
 `job_id`, `runtime_id`, `trace_id`, `request_id` liên kết xử lý/monitoring theo từng phạm vi. Worker tạo runtime ID khi message thiếu. Cache/retry kiểm scope và execution revision; SQLite/Docker volumes phục vụ một host, không bảo đảm model chỉ được gọi đúng một lần trong mọi sự cố.
 
-DynamoDB `contract-risk-jobs` lưu trạng thái hiện tại, khóa `job_id` (String). `contract-risk-job-events` lưu lịch sử thêm mới, khóa `job_id` + `event_id` (String). Cập nhật chịu kiểm soát runtime/lease/sequence. Xem [worker](docs/workers.md) về giao thức nội bộ và chế độ ContractGuard khi có `WORKER_RESULTS_QUEUE_URL`.
+DynamoDB `contract-risk-jobs` lưu vị trí hiện tại của từng hợp đồng, khóa `job_id` (String). `contract-risk-job-events` chỉ lưu kết cục của job (completed/failed/cancelled), khóa `job_id` + `event_id` (String). Cập nhật chịu kiểm soát runtime/lease/sequence. Xem [worker](docs/workers.md) về giao thức nội bộ và chế độ ContractGuard khi có `WORKER_RESULTS_QUEUE_URL`.
 
 ## Cấu hình và lưu trữ
 

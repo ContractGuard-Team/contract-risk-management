@@ -14,9 +14,10 @@ def timeline(events):
              for e in events]
     failure = next((s for s in steps if s["status"] == "failed"), None)
     done = any(e["service"] == "worker" and e["stage"] == "completed" and e["status"] == "completed" for e in events)
+    cancelled = any(e["status"] == "cancelled" for e in events)
     first = events[0]
     return {"trace_id": first.get("trace_id"), "job_id": first.get("job_id"), "contract_id": first.get("contract_id"),
-            "status": "failed" if failure else ("completed" if done else "running"),
+            "status": "cancelled" if cancelled else "failed" if failure else "completed" if done else "running",
             "wall_ms": round((ended - started) / 1_000_000, 1),
             "services": list(dict.fromkeys(e["service"] for e in events)),
             "first_failure": failure, "steps": steps}

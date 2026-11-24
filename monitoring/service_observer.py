@@ -3,6 +3,7 @@ from contextlib import contextmanager
 import time
 from monitoring.observer import NullObserver, NullObservation
 from monitoring.client import emit
+from common.exceptions import JobCancelled
 
 
 class SafeObservation(NullObservation):
@@ -41,7 +42,7 @@ class ServiceObserver(NullObserver):
         try:
             yield observation
         except Exception as exc:
-            emit(self.service, name, "failed", **self.identity, **observation.fields,
+            emit(self.service, name, "cancelled" if isinstance(exc, JobCancelled) else "failed", **self.identity, **observation.fields,
                  error_type=type(exc).__name__, duration_ms=(time.monotonic()-start)*1000)
             raise
         else:

@@ -14,5 +14,9 @@ class ModelResponseError(RuntimeError):
     """The model did not return a complete, usable text response."""
 
 
+class JobCancelled(RuntimeError):
+    """The user cancelled this contract's job: stop now, never retry."""
+
+
 class SourceError(ValueError):
     """Invalid source descriptor or an unreadable/oversized source file."""

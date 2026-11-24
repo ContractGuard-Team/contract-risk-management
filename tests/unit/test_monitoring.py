@@ -97,16 +97,14 @@ class CollectorTests(unittest.TestCase):
 
     def test_retention_keeps_rows_waiting_for_export(self):
         old = time.time_ns() - 40 * 86400 * 10**9
-        stale = event("worker", "processing", "running", old)
-        del stale["job_id"]  # not job-scoped: nothing waits on worker forwarding
-        self.store.add(stale)
+        self.store.add(event("worker", "processing", "running", old))
         self.assertEqual(self.store.purge(30, langfuse_active=True, webhook_active=False), 0)  # Langfuse not sent yet
         self.assertEqual(self.store.purge(30, langfuse_active=False, webhook_active=False), 1)
 
     def test_http_endpoints(self):
         from fastapi.testclient import TestClient
         env = {"DATA_DIR": self.dir.name + "/svc", "INTERNAL_API_TOKEN": TOKEN, "LANGFUSE_ENABLED": "false",
-               "MONITORING_WORKER_ENABLED": "false", "MONITORING_URL": "", "ALERT_WEBHOOK_URL": ""}
+               "MONITORING_URL": "", "ALERT_WEBHOOK_URL": ""}
         with patch.dict(os.environ, env), contextlib.redirect_stdout(io.StringIO()), TestClient(create_app()) as http:
             auth = {"Authorization": "Bearer " + TOKEN}
             now = time.time_ns()
@@ -149,6 +147,9 @@ class OutputFormatTests(unittest.TestCase):
         failed = attrs(event("agent-2", "job", "failed", now, error_type="ValueError", duration_ms=3))
         self.assertEqual((failed["langfuse.observation.type"], failed["langfuse.observation.level"],
                           failed["langfuse.observation.status_message"]), ("span", "ERROR", "ValueError"))
+        stopped = attrs(event("worker", "pipeline", "cancelled", now))
+        self.assertEqual((stopped["langfuse.observation.type"], stopped["langfuse.observation.level"]), ("span", "WARNING"))
+        self.assertEqual(timeline([event("worker", "pipeline", "cancelled", now)])["status"], "cancelled")
 
 
 class ServiceObserverProgressTests(unittest.TestCase):

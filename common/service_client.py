@@ -1,10 +1,15 @@
 """Retry bounded, idempotent job submissions and polls between containers."""
 import hashlib
 import json
+import logging
 import os
 import time
 from urllib.parse import urlsplit
 import httpx
+
+from common.exceptions import JobCancelled
+
+log = logging.getLogger(__name__)
 
 
 class RemoteServiceError(RuntimeError):
@@ -54,6 +59,19 @@ class ServiceClient:
 
     def run_job(self, payload, *, guard=lambda: None, on_progress=lambda _: None, timeout=None):
         key = call_key(payload)
+        try:
+            return self._run_job(key, payload, guard, on_progress, timeout)
+        except JobCancelled:
+            self._cancel_job(key, payload["identity"]["request_id"])  # cascades: the remote stops its own remote jobs
+            raise
+
+    def _cancel_job(self, key, request_id):
+        try:
+            self.request("POST", f"/v1/jobs/{key}/cancel", request_id=request_id, timeout=5)
+        except RemoteServiceError as exc:  # never submitted (404) or unreachable: this side stops anyway
+            log.warning("remote job not cancelled: %s", exc)
+
+    def _run_job(self, key, payload, guard, on_progress, timeout):
         deadline = time.monotonic() + float(timeout or os.getenv("JOB_TIMEOUT_SECONDS", "3600"))
         def check():
             guard()
@@ -75,6 +93,8 @@ class ServiceClient:
                 if not isinstance(row.get("result"), dict):
                     raise RemoteServiceError("Missing structured job result")
                 return row["result"]
+            if row["status"] == "cancelled":
+                raise JobCancelled("Remote job was cancelled")
             if row["status"] == "failed":
                 raise RemoteServiceError("Remote job failed: " + str(row.get("error_type", "Unknown")))
             if row["status"] not in ("queued", "running"):

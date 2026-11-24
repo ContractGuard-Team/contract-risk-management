@@ -19,6 +19,7 @@ from pydantic import ValidationError
 
 from common.schemas.business.inbound import AnalysisRequest, InboundMessage
 from common.schemas.business.outbound import OutboundMessage
+from common.service_client import RemoteServiceError
 from workers.contracts import SourceError
 
 log = logging.getLogger(__name__)
@@ -31,6 +32,7 @@ STEPS = {"downloading": "reading_file", "dispatching": "reading_file", "processi
 # ERR-UPL-004 (more than the allowed pages) is the partner's own code; the two AI codes stay provisional.
 # shortcut: provisional codes until ContractGuard shares its full ERR-* catalogue; agree them with SE.
 ERR_INPUT, ERR_PROCESSING, ERR_TOO_MANY_PAGES = "ERR-AI-001", "ERR-AI-002", "ERR-UPL-004"
+ERR_CANCELLED = "ERR-AI-003"  # provisional too: queue-messages.v1 has no `cancelled` event, so `failed` carries it
 
 
 def input_error(message, code=None):
@@ -58,6 +60,11 @@ def check_outbound(message):
     if data["event_type"] == "completed" and not data["result_key"].endswith("/extraction.json"):
         raise ValueError("Outbound result_key must be results/<job>/extraction.json")  # partner IAM: this name only
     return data
+
+
+def safe_reason(exc):
+    """Why a job stopped, never contract text: our own input/remote errors as written, any other only by its type."""
+    return str(exc)[:300] if isinstance(exc, (SourceError, RemoteServiceError)) else type(exc).__name__
 
 
 def is_input_error(exc):
@@ -128,9 +135,11 @@ class PartnerProtocol:
             self.send("progress", job_id, step=step)
 
     def failed(self, job_id, exc):
-        reason = str(exc)[:300] if isinstance(exc, SourceError) else type(exc).__name__  # never contract text
         code = getattr(exc, "error_code", None) or (ERR_INPUT if is_input_error(exc) else ERR_PROCESSING)
-        self.send("failed", job_id, failure_reason=reason, error_code=code)
+        self.send("failed", job_id, failure_reason=safe_reason(exc), error_code=code)
+
+    def cancelled(self, job_id):
+        self.send("failed", job_id, failure_reason="Cancelled by user", error_code=ERR_CANCELLED)
 
     # --- S3 ------------------------------------------------------------------------------------------
     def store_clean(self, partner, file):

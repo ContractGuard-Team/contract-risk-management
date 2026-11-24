@@ -31,7 +31,7 @@ flowchart LR
 - `orchestration/`: LangGraph gọi agent HTTP, kiểm revision, tổng hợp chunk, handoff, retry/cache/resume. Dựng `AnalysisResult` từ kết quả ba agent; tính điểm trong `scoring.py`.
 - `mcp_server/` và `rag/`: service MCP cấp tool cho Agent 2/3; connector mở khi cần. RAG giữ bằng chứng và hiệu lực pháp luật. Agent không import RAG qua container.
 - `common/`: schema, settings, ports, HTTP/auth và durable job queue. `config/`: secret bootstrap/broker có token riêng từng principal, allowlist từ `policy.json`.
-- `monitoring/`: event HTTP/stdout, SQLite/outbox, metrics/alerts, forwarding worker và Langfuse OTLP tùy chọn.
+- `monitoring/`: event HTTP/stdout, SQLite/outbox, metrics/alerts và Langfuse OTLP.
 - `data_pipeline/`: collector thu thập web → S3 file gốc và bytes → processor → Supabase/Qdrant. Service processor retry/refresh; không dùng SQS hợp đồng hoặc worker Docker.
 
 ## Dữ liệu và vận hành

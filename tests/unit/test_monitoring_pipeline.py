@@ -21,14 +21,12 @@ def event(**fields):
 
 
 class PipelineEventsTests(unittest.TestCase):
-    def test_pipeline_events_are_stored_but_never_forwarded_to_the_worker(self):
+    def test_pipeline_events_are_stored(self):
         with tempfile.TemporaryDirectory() as directory:
             store = EventStore(Path(directory) / "events.sqlite3")
             saved = store.add(event(stage="process", status="done", document="61/2020/QH14", count=3,
                                     trace_id="a" * 32, duration_ms=1200.5))
             self.assertEqual((saved["document"], saved["count"]), ("61/2020/QH14", 3))
-            row = store.db.execute("SELECT worker_exported FROM events WHERE id=?", (saved["event_id"],)).fetchone()
-            self.assertEqual(row[0], 1)  # already "exported": the worker only receives contract job events
             self.assertIn("data-collector.process", store.metrics()["stages"])
             store.db.close()
         with self.assertRaises(ValueError):

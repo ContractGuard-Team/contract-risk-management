@@ -175,7 +175,9 @@ class BaseAgent:
                 kwargs["tool_choice"] = "none"  # tool budget spent: answer with what was found
         return self.provider.generate(messages, **kwargs)
 
-    def run(self, request: AgentRequest, *, memory=None, observer=None, trace_metadata=None) -> AgentResult:
+    def run(self, request: AgentRequest, *, memory=None, observer=None, trace_metadata=None,
+            guard=lambda: None) -> AgentResult:
+        """guard() raises when this job was cancelled or timed out; it is checked before every model call."""
         current = self.build_messages(request)
         messages = memory.prepare(current) if memory is not None else current
         observer = observer if observer is not None else NullObserver()
@@ -189,6 +191,7 @@ class BaseAgent:
             transcript, usage = list(messages), {}
             rounds = reevaluations = tool_calls = fixes = 0
             while True:
+                guard()
                 keep_in_budget(transcript, len(messages), memory)
                 response = self._generate(transcript, tools, final=rounds >= MAX_TOOL_ROUNDS)
                 add_usage(usage, response.usage)  # billed even when the response is rejected below

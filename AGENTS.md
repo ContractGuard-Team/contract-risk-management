@@ -329,3 +329,18 @@
   sửa 1 câu rationale Agent 2); `tests/unit/test_bilingual_prompts.py`.
 - 261/261 unit test (venv Python 3.13 cài từ lock). Gọi Gemini thật: text + 4 mức thinking + vòng tool 2 lượt đạt.
   Chưa build lại image, chưa chạy E2E container/hợp đồng thật với Gemini. Dependency `openai` vẫn trong lock (không còn dùng).
+
+## Monitoring, DynamoDB và cancel (2026-11-24, mới nhất)
+
+- Đọc `docs/workers.md` (mục "Hai bảng DynamoDB" và "Cancel, lỗi và output lỗi") và đầu `docs/langfuse_monitoring.md` trước khi sửa.
+- Langfuse: mặc định `LANGFUSE_ENABLED=true`; lệnh kiểm `python -m monitoring.langfuse_exporter` trong container monitoring;
+  `/readyz` có `langfuse_error`/`langfuse_pending`; event bị từ chối không chặn event sau. Chưa xác nhận trên EC2/Langfuse thật.
+- DynamoDB: jobs = mỗi hợp đồng một dòng (`location` + `status`), ghi đè mỗi bước, giữ nguyên khi xong tới job mới cùng contract;
+  events = tối đa một log `outcome` mỗi job (completed/failed/cancelled). Đã xóa luồng monitoring → worker (`worker_exporter.py`,
+  `monitoring_inbox.py`, `MONITORING_WORKER_*`); các mục cũ nhắc `registered/trace/worker:*/monitoring:*/superseded` là lịch sử.
+- Cancel: `ContractJobStore.cancel` + `workers/cancel.py` (HTTP worker, queue `WORKER_CANCEL_QUEUE_URL`); lan xuống service qua
+  `POST /v1/jobs/{key}/cancel` (`JobCancelled`), runner bỏ lại lời gọi model đang treo. Lỗi hết lượt thử: output lỗi
+  `error_result()` (đủ khóa `AnalysisResult`, thiếu = null) + log + message `failed`; áp dụng cả message nội bộ.
+- Tạm, chờ ContractGuard: message `cancel_requested`, mã `ERR-AI-003`, dùng `failed` để báo cancel.
+- 281/281 unit test; E2E tiến trình thật (không Docker; Moto, model fixture, Langfuse giả): cancel dừng sau ~1 giây, hợp đồng sau
+  chạy tiếp. Chưa build image, chưa chạy `container_smoke.py` đã sửa, chưa chạy AWS/EC2 thật.
