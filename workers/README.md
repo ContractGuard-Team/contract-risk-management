@@ -18,5 +18,4 @@ ID/hash và quyền sở hữu; S3 output lưu trước DynamoDB completed và D
 Langfuse reader/multipart client cũ còn giữ như adapter library để không phá caller cũ;
 entrypoint Compose luôn dùng HTTP processing + LangGraph, không cần Langfuse API key.
 
-Xem [giao thức](../docs/container_interfaces.md), [môi trường](../docs/environment.md),
-[triển khai](../docs/deployment_ec2.md) và [kiểm thử](../docs/testing.md).
+Xem [worker](../docs/workers.md), [giao thức](../docs/architecture.md) và [vận hành](../docs/operations.md).

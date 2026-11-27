@@ -101,4 +101,4 @@ scope (contract_id, version, chunk_id, chunk_index) trong một row cache; khôi
 chỉ từ chunk N-1 cùng contract; aggregate kiểm scope từng chunk, lưu và đọc lại bản tổng hợp
 rồi mới gọi ContractCache.release_memory để xóa snapshot Agent 1 (giữ output). Memory RAM
 là object cục bộ mỗi lượt gọi nên tự giải phóng. Chưa dọn checkpoint toàn job. Xem
-docs/agent_1_flow.md. -->
+docs/ai_agents.md. -->

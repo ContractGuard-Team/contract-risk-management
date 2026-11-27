@@ -2,7 +2,7 @@
 
 Hệ thống phân tích rủi ro hợp đồng với ba AI agent, điều phối bằng LangGraph và tích hợp ContractGuard qua AWS SQS/S3. Worker nhận yêu cầu, tiền xử lý hợp đồng, chạy các agent, lưu kết quả và cập nhật tiến độ. Luồng dữ liệu pháp luật riêng cung cấp bằng chứng cho Agent 2/3 qua MCP và RAG.
 
-Tài liệu mô tả source code tại **2026-11-18**. Hướng dẫn GitHub → EC2 → khởi chạy: **[docs/ec2_setup_guide.md](docs/ec2_setup_guide.md)**.
+Tài liệu mô tả source code tại **2026-11-18**. Hướng dẫn GitHub → EC2 → khởi chạy: **[docs/operations.md](docs/operations.md)**.
 
 ## Luồng phân tích hợp đồng
 
@@ -71,7 +71,7 @@ flowchart LR
 
 `data_pipeline/` chạy bằng **hai service systemd với venv riêng**, ngoài Compose. Collector thu thập Hiến pháp và Luật/Bộ luật; S3 chỉ lưu file gốc. Processor nhận bytes trực tiếp, chuẩn hóa, phân tách Điều, quản lý phiên bản/hiệu lực và ghi Supabase/Qdrant. Processor service xử lý retry và cập nhật hiệu lực theo lịch. Luồng này không xử lý hợp đồng người dùng.
 
-RAG dùng `intfloat/multilingual-e5-large` (1024 chiều), dense + sparse search, lọc hiệu lực/phiên bản, gộp phần của cùng Điều và rerank bằng `jinaai/jina-reranker-v2-base-multilingual`. Model chạy CPU từ `models/`; không cần embedding API key. Xem [thiết kế pipeline](docs/data_pipeline_design.md) và [RAG](docs/rag.md).
+RAG dùng `intfloat/multilingual-e5-large` (1024 chiều), dense + sparse search, lọc hiệu lực/phiên bản, gộp phần của cùng Điều và rerank bằng `jinaai/jina-reranker-v2-base-multilingual`. Model chạy CPU từ `models/`; không cần embedding API key. Xem [data pipeline](docs/data_pipeline.md) và [RAG](docs/ai_agents.md).
 
 ## Cấu trúc repository
 
@@ -102,14 +102,14 @@ contract-risk-management/
 │   └── aws/                     # IAM policy tham khảo
 ├── scripts/                     # init_env.py, download_models.py, preprocess_contract.py
 ├── tests/                       # Unit, integration, notebook từng agent và tổng thể
-├── docs/                        # Kiến trúc, giao thức, vận hành và lịch sử kiểm thử
+├── docs/                        # Kiến trúc, agent, worker, dữ liệu, vận hành
 ├── models/                      # Model tải trước, không commit Git
 ├── docker-compose.yml           # Compose duy nhất: 9 service
 ├── .env.example                 # Mẫu cấu hình host; .env thật không commit
 └── pyproject.toml               # Python package và dependency nền
 ```
 
-Source Hermes upstream được giữ nguyên. `__init__.py` rỗng là dấu package Python. [Biên bản dọn project](docs/project_cleanup.md) giải thích các file rỗng đã xóa và những file cố ý giữ lại.
+Source Hermes upstream được giữ nguyên. `__init__.py` rỗng là dấu package Python.
 
 ## Schema và dữ liệu bàn giao
 
@@ -162,11 +162,11 @@ docker compose ps
 
 `init_env.py` tạo `APP_ENV=local`, `MODEL_PROVIDER=fixture`, `WORKER_ENABLED=false`. **Local Compose vẫn cần credential đọc Secrets Manager**; fixture chỉ thay model và tắt polling worker. Unit test dùng mock/Moto, không cần tài khoản cloud. Dùng queue thử riêng khi kiểm thử gửi job.
 
-Notebook từng agent và tổng thể chạy test offline có sẵn; không đánh giá chất lượng model thật. Xem [tests/README.md](tests/README.md) để chọn test/notebook và [docs/testing.md](docs/testing.md) cho lịch sử kiểm thử container.
+Notebook từng agent và tổng thể chạy test offline có sẵn; không đánh giá chất lượng model thật. Xem [tests/README.md](tests/README.md) để chọn test/notebook và [docs/operations.md](docs/operations.md) cho smoke test container.
 
 ## Triển khai và vận hành
 
-Làm theo [hướng dẫn EC2](docs/ec2_setup_guide.md): GitHub → clone vào `/opt/contract-risk-management` → `.env` → `models/` → build → kiểm IAM/secret/readiness → bật worker. Data pipeline có bước systemd và migration riêng.
+Làm theo [hướng dẫn EC2](docs/operations.md): GitHub → clone vào `/opt/contract-risk-management` → `.env` → `models/` → build → kiểm IAM/secret/readiness → bật worker. Data pipeline có bước systemd và migration riêng.
 
 ```sh
 docker compose ps
@@ -183,14 +183,11 @@ Giới hạn hiện tại: cần nghiệm thu model/AWS thật trên môi trư�
 
 | Nội dung | Tài liệu |
 | --- | --- |
-| Deploy EC2, update, rollback, systemd | [EC2 setup guide](docs/ec2_setup_guide.md) |
-| Kiến trúc và giao tiếp container | [Architecture](docs/architecture.md), [Container interfaces](docs/container_interfaces.md) |
-| Environment, Secrets Manager | [Environment](docs/environment.md) |
-| Worker, tiền xử lý | [Workers](docs/workers.md), [Input processing](docs/input_processing.md) |
-| Prompt, memory, workflow | [Agent core](docs/agent_core.md), [Agent workflow](docs/agent_workflow.md) |
-| MCP, RAG, dữ liệu pháp luật | [MCP](docs/mcp.md), [RAG](docs/rag.md), [Data pipeline](docs/data_pipeline_design.md) |
-| Monitoring và Langfuse | [Monitoring](docs/monitoring.md), [Langfuse](docs/langfuse_monitoring.md) |
-| Test và kiểm tra image | [Tests](tests/README.md), [Testing history](docs/testing.md), [EC2 readiness history](docs/ec2_readiness.md) |
-| Phân loại file rỗng | [Cleanup](docs/project_cleanup.md) |
+| Kiến trúc, giao thức nội bộ, schema, tiền xử lý | [Architecture](docs/architecture.md) |
+| Agent: prompt, model, memory, tool, RAG | [Agents](docs/ai_agents.md) |
+| Worker, ContractGuard, DynamoDB, cancel, chatbot | [Workers](docs/workers.md) |
+| Dữ liệu pháp luật | [Data pipeline](docs/data_pipeline.md) |
+| Env, secret, EC2, monitoring, Langfuse, kiểm thử | [Operations](docs/operations.md), [Tests](tests/README.md) |
+| Bản gửi đối tác: cancel và lỗi | [Partner](docs/partner_cancel_and_failure.md) |
 
 [folder-responsibilities.md](docs/folder-responsibilities.md) là bản thiết kế gốc được giữ nguyên; các tên folder/dịch vụ lịch sử trong đó không mô tả runtime hiện tại.

@@ -7,6 +7,11 @@
 - Từ 2026-11-06, backend API và database ở root đã bỏ; worker SQS hai tiến trình được triển khai theo yêu cầu mới nhất. Đọc `docs/architecture.md` để đối chiếu thay đổi; giữ nguyên bản tham chiếu gốc.
 - Yêu cầu mới của người dùng được ưu tiên. Kiểm tra code thực tế trước khi kết luận một chức năng đã có; khi thay đổi phân công module, cập nhật tài liệu liên quan.
 
+- Từ 2026-11-26, `docs/` chỉ còn: `architecture.md`, `ai_agents.md`, `workers.md`, `data_pipeline.md`, `operations.md` (mô tả hiện tại),
+  `partner_cancel_and_failure.md` (bản gửi ContractGuard), `folder-responsibilities.md` (nguyên văn của người dùng), `architecture/` (sơ đồ).
+  Các mục lịch sử bên dưới nhắc "mục cuối"/tên mục cũ: tìm theo tiêu đề trong file gộp, bản cũ xem bằng git. Cập nhật vào 5 file này,
+  không tạo thêm ghi chú bàn giao theo ngày trong `docs/`.
+
 ## Trách nhiệm các folder
 
 | Folder | Phạm vi |
@@ -18,7 +23,7 @@
 | `orchestration/` | Workflow, state, chuyển context, gọi agent, retry nghiệp vụ, tổng hợp kết quả và checkpoint khi triển khai. |
 | `workers/` | SQS/S3 intake, HTTP processing → LangGraph, runtime hai tiến trình, DynamoDB/S3-before-ACK. Docker/env/dependencies quản lý tập trung tại root/infrastructure theo plan_work.txt. |
 | `data_pipeline/` | Thu thập dữ liệu tham chiếu luật/thị trường/doanh nghiệp; chuẩn hóa, kiểm chứng, loại trùng, quản lý phiên bản, định tuyến và ghi PostgreSQL/Qdrant/S3. |
-| `mcp_server/` | MCP gateway (image `mcp`) cho Agent 2/3: nhận tool call, mở connector theo tool được gọi; connector nằm ở `integrations/`. Xem `docs/mcp.md`. |
+| `mcp_server/` | MCP gateway (image `mcp`) cho Agent 2/3: nhận tool call, mở connector theo tool được gọi; connector nằm ở `integrations/`. Xem `docs/ai_agents.md`. |
 | `rag/` | Logic truy xuất, lọc metadata, hybrid search, rerank và định dạng bằng chứng cho Agent 2/3. Qdrant là kho vector. |
 | `integrations/` | Client của agent/dữ liệu tham chiếu: Bedrock/database/API/search/MCP; client SQS/S3/DynamoDB riêng của worker ở workers/connectors. Không chứa nghiệp vụ phân loại/chấm điểm. |
 | `common/` | Schema/settings/ports; HTTP auth/client, bounded JSON, durable job queue/lease dùng chung giữa service. |
@@ -37,23 +42,23 @@
 - Agent gọi tool nghiệp vụ; tool tìm kiếm dùng `rag/`; client dịch vụ nằm ở `integrations/`. Logic workflow thuộc `orchestration/`, không đặt trong client AWS.
 - Ba agent chạy container riêng phải giao tiếp qua service hoặc queue; import object Python chỉ phù hợp khi chạy cùng tiến trình.
 - Bảo toàn nguồn trích dẫn, vị trí điều khoản và metadata của bằng chứng. Dữ liệu tham chiếu cần provenance, thời điểm thu thập, ngày hiệu lực và phiên bản.
-- Prompt chỉ có tác dụng khi code chủ động nạp (`load_prompts`); không giả định Hermes tự đọc. Cấu trúc hiện tại: `docs/agent_core.md` (mục cuối file này).
+- Prompt chỉ có tác dụng khi code chủ động nạp (`load_prompts`); không giả định Hermes tự đọc. Cấu trúc hiện tại: `docs/ai_agents.md` (mục cuối file này).
 
 ## Đối chiếu tài liệu với repo tại thời điểm ghi nhớ (2026-11-03)
 
 - Repo có 18 folder cấp cao nhất ngoài `.git`, gồm `common/` và `docs/`; con số 16/17 trong bản mô tả không phải số lượng chuẩn để kiểm tra repo.
 - Dockerfile ba agent nằm tại `infrastructure/docker/`; Compose nằm ở root (`compose.yaml`, `compose.ec2.yaml`). Dockerfile API đã bỏ; Dockerfile.contract_worker được triển khai lại cho yêu cầu worker mới. Compose root chạy worker; compose.ec2.yaml còn là khung.
 - `infrastructure/aws/`, `infrastructure/ecs/`, `infrastructure/ecr/`, `data_pipeline/scheduler/`, `orchestration/checkpoint.py` và `monitoring/alerts.py` là các phần dự kiến/chưa có. ECS/Fargate là tùy chọn khi thay đổi nền tảng triển khai, không phải yêu cầu đã chốt.
-- LangGraph đã được triển khai trong `orchestration/workflow.py`; xem `docs/agent_workflow.md`. Agent 1 xử lý các chunk tuần tự, cache đầy đủ trước khi tổng hợp và chuyển context sang Agent 2; Agent 2 chuyển output vào context Agent 3.
+- LangGraph đã được triển khai trong `orchestration/workflow.py`; xem `docs/ai_agents.md`. Agent 1 xử lý các chunk tuần tự, cache đầy đủ trước khi tổng hợp và chuyển context sang Agent 2; Agent 2 chuyển output vào context Agent 3.
 - Base code hiện có: pipeline cùng tiến trình gọi ba agent, cấu hình riêng từng agent, nạp các Markdown bắt buộc, ghép context, model provider và bộ chuyển đổi Bedrock từ Hermes. Tool có giao diện/callback đăng ký tường minh; memory lưu theo instance của job. Chưa có vòng lặp runtime tự gọi tool, retrieval hoặc schema nghiệp vụ. Prompt, API/model config và chính sách riêng vẫn để TODO theo yêu cầu người dùng.
 - Memory workflow dùng extension ContextEngine của Hermes, riêng từng agent/job, snapshot lưu cùng result trong SQLite. Không dùng memory cá nhân toàn cục của Hermes. Giữ nguyên raw results khi nén context; chưa được tự viết prompt hay luật nghiệp vụ thay người dùng.
 - Người dùng đã yêu cầu viết plan cho Agent 1: đọc `agents/agent_1_classification/plan.md`. Vòng đời mục tiêu là context → xử lý theo prompt → output/cache → tổng hợp đủ chunk → giải phóng memory Agent 1, giữ kết quả để Agent 2 sử dụng. Plan đã viết; cleanup snapshot/checkpoint chưa được triển khai bằng code, không được báo là đã tự động hoạt động.
 - Plan Agent 2/3 đã viết trong `agents/agent_2_risk_scoring/plan.md` và `agents/agent_3_recommendation/plan.md`, cùng cấu trúc vòng đời Agent 1. Ưu tiên truy xuất database qua MCP; chỉ chuyển sang tool search web qua MCP khi bằng chứng chưa đủ. Giữ nguồn, điểm thiếu, cache kết quả/bằng chứng và memory theo hợp đồng; dọn memory sau khi kết quả đã lưu và bàn giao được. Đây là quy trình mục tiêu: MCP client, vòng lặp tool, kiểm tra bằng chứng/schema và cleanup chưa được triển khai; binding/endpoint/credential và luật nghiệp vụ vẫn để TODO.
-- Source Hermes yêu cầu Python >=3.11,<3.15; workspace kiểm thử bằng `.venv312` (Python 3.12). Unit test dùng `unittest` trong `tests/unit/`; các notebook vẫn trống. Xem `docs/testing.md`.
+- Source Hermes yêu cầu Python >=3.11,<3.15; workspace kiểm thử bằng `.venv312` (Python 3.12). Unit test dùng `unittest` trong `tests/unit/`; các notebook vẫn trống. Xem `docs/operations.md`.
 
 ## Cập nhật tiền xử lý (2026-11-04)
 
-- `input_processing/` đã xử lý text hoặc file local/S3: TXT/PDF/DOCX/ảnh, OCR, validation/limits, normalize có nguồn, cấu trúc và chunking; xem `docs/input_processing.md`. Tesseract và gói ngôn ngữ là dependency hệ điều hành; chưa có trên workspace kiểm thử.
+- `input_processing/` đã xử lý text hoặc file local/S3: TXT/PDF/DOCX/ảnh, OCR, validation/limits, normalize có nguồn, cấu trúc và chunking; xem `docs/architecture.md`. Tesseract và gói ngôn ngữ là dependency hệ điều hành; chưa có trên workspace kiểm thử.
 - `ContractRiskPipeline.run_preprocessing_job` nối kết quả sang `ContractInput` rồi workflow hiện có. Metadata nguồn được giữ qua Agent 1/handoff; không sửa prompt/luật nghiệp vụ.
 - Token mặc định là UTF-8 byte estimate; counter cho text khác chữ ký counter messages của workflow. Không tự tải tokenizer hoặc cho rằng estimate là usage model.
 - Source offsets là ký tự trong text đã extract/cleaned text, mapping cấp dòng; PDF/ảnh biết trang vật lý, DOCX dùng element ID và page=null. Không tuyên bố là tọa độ chính xác trong PDF.
@@ -72,7 +77,7 @@
 - `monitoring/worker_observer.py` chuyển observation trực tiếp qua IPC tới progress worker, không phụ thuộc telemetry cloud. Không gửi raw contract/output vào DynamoDB progress tự động.
 - Runtime UUID4 khi thiếu, lưu theo job_id và dùng lại khi SQS redeliver. Lease/sequence ngăn owner/event cũ ghi đè. Cache SQLite lưu trên volume để retry, không đảm bảo exactly-once model call giữa các host.
 - Dockerfile worker và compose root có cấu hình chạy; chưa build/run Docker hoặc gọi AWS thật. Không provision SQS/S3/DynamoDB/IAM. Các TODO prompt/model/memory cũ giữ nguyên.
-- Test mới dùng Moto, model giả, LangGraph thật; có spawn progress process và notebook worker. Xem `docs/workers.md` và `docs/testing.md` cho giới hạn kiểm chứng.
+- Test mới dùng Moto, model giả, LangGraph thật; có spawn progress process và notebook worker. Xem `docs/workers.md` và `docs/operations.md` cho giới hạn kiểm chứng.
 
 ## Gỡ telemetry khi chuẩn bị EC2 (2026-11-06)
 
@@ -97,12 +102,12 @@
 - Intake polling sau khi validate đủ cấu hình: nhận SQS, giữ runtime/lease DynamoDB, tải S3, bind hash/trace, HTTP multipart với Idempotency-Key ổn định rồi đợi ACK cuối. Progress đọc observations v2 theo trace_id; chỉ worker_event có identity khớp được cập nhật progress. Agent 3 output phải lưu S3 trước completed DynamoDB/ACK/DeleteMessage.
 - HTTP server bọc input_processing, bàn giao bền vững/idempotency bên nhận và producer phát worker_event vào Langfuse chưa triển khai trong repo. Không tự nối preprocessing → Agent 1; không sửa graph/handoff/model/prompt giữa ba agent. Chỉ có API key/trace generation thông thường chưa đủ hoàn tất job.
 - Không cài SDK/exporter Langfuse. Worker chỉ gửi GET qua httpx với project API keys; cấu hình riêng ở workers/.env.example, không đọc root .env. Xem workers/README.md cho giao thức và cách build/run.
-- Image contract-risk-worker:local đã build ở workspace. Xem docs/testing.md cho kết quả unit/notebook/container và các giới hạn; chưa provision hoặc deploy AWS/EC2, chưa kiểm chứng endpoint thật.
+- Image contract-risk-worker:local đã build ở workspace. Xem docs/operations.md cho kết quả unit/notebook/container và các giới hạn; chưa provision hoặc deploy AWS/EC2, chưa kiểm chứng endpoint thật.
 - Kết quả sau đóng gói: 94/94 unit test, 3/3 notebook đạt. Container Linux/amd64 chạy UID 10001, hai tiến trình spawn và stop SIGTERM exit 0; Compose root/folder đều hợp lệ. Không có kết nối cloud thật trong smoke test.
 
 ## Thực hiện plan_work.txt: multi-container (2026-11-07, cập nhật mới nhất)
 
-- Yêu cầu này thay thế thiết kế Docker worker độc lập và trạng thái ngắt kết nối trước đó. Đọc plan_work_note.md để tiếp tục theo checkpoint thực tế, docs/container_interfaces.md cho giao thức.
+- Yêu cầu này thay thế thiết kế Docker worker độc lập và trạng thái ngắt kết nối trước đó. Đọc plan_work_note.md để tiếp tục theo checkpoint thực tế, docs/architecture.md cho giao thức.
 - Một docker-compose.yml ở root quản lý 8 service/image: worker, input-processing, agent-1/2/3, langgraph, monitoring, config. Dockerfile target và dependency locks nằm trong infrastructure/. Không có Compose/env/requirements riêng ở workers/ nữa.
 - Root .env ignored, host-only; scripts/init_env.py tạo token ngẫu nhiên và local fixture mode nếu file chưa tồn tại. Compose inject đúng biến service; Config broker có token riêng từng principal và policy allowlist. Không log/bake secrets; provider AWS dùng IAM/credential chain.
 - common/service_jobs.py: HTTP jobs có auth, idempotency, SQLite volume, lease/heartbeat, progress/result và phục hồi claim sau crash. Single-host storage, không cam kết exactly-once model call hoặc checkpoint đa host.
@@ -111,12 +116,12 @@
 - MODEL_PROVIDER=fixture chỉ hợp lệ khi APP_ENV=local; instructions fixture nằm /tmp, không sửa prompt/plan nguồn. Production cần Bedrock model/region, instructions và memory budgets hiện còn TODO. Không tự viết luật chấm điểm.
 - Monitoring nhận telemetry HTTP + stdout JSON, lọc nội dung/secret, lưu SQLite/outbox. Export OTLP Langfuse khi enabled và đủ key; thiếu key vẫn chạy nội bộ. Không triển khai Langfuse Server; worker không cần Langfuse để hoàn tất job.
 - Worker vẫn giữ hai process và AWS lease/hash/order/S3-before-completed-before-ACK/DeleteMessage. WORKER_ENABLED=false là idle rõ ràng; entrypoint chạy mới luôn dùng processing + LangGraph. Reader/multipart legacy chỉ còn cho caller library/test cũ.
-- Không thay Hermes upstream, không tạo apps/database root/Redis/Lambda hoặc tài nguyên AWS thật. Xem docs/testing.md và báo cáo plan_work để phân biệt nghiệm thu local với production.
-- Nghiệm thu cuối: 106/106 unit test, 4/4 notebook, 8/8 image build và service healthy; E2E AWS Moto/model fixture đạt cả khi Agent 2 scale=2. OCR Tesseract trong image, volume persistence, UID/dependencies và shell EC2 đã kiểm tra. Đã trả Agent 2 về một replica, worker local idle. Báo cáo tại docs/plan_work_report.md; lần sau đọc checkpoint đầu plan_work_note.md, không làm lại các mục local đã hoàn tất.
+- Không thay Hermes upstream, không tạo apps/database root/Redis/Lambda hoặc tài nguyên AWS thật. Xem docs/operations.md và báo cáo plan_work để phân biệt nghiệm thu local với production.
+- Nghiệm thu cuối: 106/106 unit test, 4/4 notebook, 8/8 image build và service healthy; E2E AWS Moto/model fixture đạt cả khi Agent 2 scale=2. OCR Tesseract trong image, volume persistence, UID/dependencies và shell EC2 đã kiểm tra. Đã trả Agent 2 về một replica, worker local idle. Báo cáo tại docs/plan_work_report.md (đã xóa 2026-11-26); lần sau đọc checkpoint đầu plan_work_note.md, không làm lại các mục local đã hoàn tất.
 
 ## Nối Langfuse cloud vào monitoring (2026-11-07, mới nhất)
 
-- Đọc `docs/langfuse_monitoring.md` trước khi làm tiếp monitoring/Langfuse. Root .env đã bật LANGFUSE_ENABLED với key project (EU cloud); không ghi key vào file tracked.
+- Đọc `docs/operations.md` trước khi làm tiếp monitoring/Langfuse. Root .env đã bật LANGFUSE_ENABLED với key project (EU cloud); không ghi key vào file tracked.
 - Monitoring export OTLP đã xác minh với Langfuse thật: 222 event lên cloud, trace đọc lại qua API v2. Org mới không dùng được API legacy /api/public/traces.
 - Observation name là `service.stage`, có `langfuse.environment`=APP_ENV và model name. Không cài SDK, không gửi nội dung hợp đồng.
 - Monitoring → worker forwarding (MONITORING_WORKER_ENABLED=true) đã bật; tiến độ DynamoDB của worker vẫn lấy chính từ polling LangGraph.
@@ -124,13 +129,13 @@
 
 ## Luồng Agent 1 theo chunk (2026-11-07, mới nhất)
 
-- Đọc `docs/agent_1_flow.md` trước khi sửa Agent 1/LangGraph. Mỗi row cache chunk = {scope, result, memory}; memory chỉ khôi phục từ chunk N−1 cùng contract/version, sai scope thì dừng trước khi gọi model.
+- Đọc `docs/ai_agents.md` trước khi sửa Agent 1/LangGraph. Mỗi row cache chunk = {scope, result, memory}; memory chỉ khôi phục từ chunk N−1 cùng contract/version, sai scope thì dừng trước khi gọi model.
 - Aggregate kiểm đủ chunk + scope, lưu và đọc lại bản tổng hợp, rồi `ContractCache.release_memory` xóa memory Agent 1 (giữ output) trước khi chuyển context sang Agent 2.
 - 115/115 unit test; E2E TXT 3 chunk có audit exit 0. Chưa dọn checkpoint toàn job hay memory Agent 2/3.
 
 ## MCP tool gateway cho Agent 2/3 (2026-11-07, mới nhất)
 
-- Đọc `docs/mcp.md` trước khi sửa tool bên ngoài. Service thứ 9 `mcp` (image riêng, `mcp_server/`) dùng SDK `mcp` 1.30, streamable HTTP, token riêng `MCP_API_TOKEN` chỉ cấp cho agent-2/3.
+- Đọc `docs/ai_agents.md` trước khi sửa tool bên ngoài. Service thứ 9 `mcp` (image riêng, `mcp_server/`) dùng SDK `mcp` 1.30, streamable HTTP, token riêng `MCP_API_TOKEN` chỉ cấp cho agent-2/3.
 - 4 tool: `web_search` chạy thật (nay là Tavily, xem mục cuối), `qdrant_search`/`postgres_query`/`s3_get_object` là base code chờ `QDRANT_URL`/`POSTGRES_DSN`/`MCP_S3_BUCKETS`; connector mở lazy khi agent gọi.
 - Agent 2/3 bind handler MCP vào ToolRegistry khi có `MCP_URL`; chưa có vòng lặp model tự gọi tool. Mục "MCP client chưa triển khai" ở trên là lịch sử.
 - 123/123 unit test, 9/9 service healthy, agent-2/3 gọi web search thật qua MCP, E2E TXT exit 0.
@@ -147,7 +152,7 @@
 - `orchestration/retry_policy.py`: retry node agent (3 lần, backoff 5→60s) chỉ cho lỗi tạm thời; Bedrock throttling/outage → `TransientModelError` (integrations/aws/bedrock_client.py), JobStore cho submit lại theo `RETRYABLE_JOB_ERRORS`. Lỗi validate/cấu hình/output không retry.
 - `orchestration/checkpoint.py`: resume từ chunk đầu chưa có trong cache (Agent 1 đủ → vào thẳng aggregate/Agent 2); xóa thread InMemorySaver sau mỗi lần chạy; xóa memory Agent 2/3 sau khi lưu `complete`. Đã xóa `orchestration/agent_client.py` rỗng (RemoteAgent ở remote_agent.py).
 - Chưa làm nhánh "Agent 2 thiếu dữ liệu → RAG/Search → đánh giá lại" (cần vòng lặp tool + luật nghiệp vụ của người dùng) và retention cache.
-- EC2: đọc `docs/ec2_readiness.md`. `infrastructure/ec2/setup.sh` kiểm Compose ≥2.24 và .env production; `preflight.sh` gọi STS từ container (IAM role, IMDS hop limit ≥2, egress). 129/129 unit test, E2E TXT + PNG exit 0.
+- EC2: đọc `docs/operations.md`. `infrastructure/ec2/setup.sh` kiểm Compose ≥2.24 và .env production; `preflight.sh` gọi STS từ container (IAM role, IMDS hop limit ≥2, egress). 129/129 unit test, E2E TXT + PNG exit 0.
 
 ## egg-info (2026-11-07)
 
@@ -155,45 +160,45 @@
 
 ## Hoàn thiện monitoring (2026-11-07, mới nhất)
 
-- Đọc `docs/monitoring.md` trước khi sửa `monitoring/`. Đã điền `logging.py` (log JSON mọi service), `metrics.py` (`/v1/metrics?window_minutes`: p95/lỗi/token/job lỗi), `tracing.py` (`/v1/traces/{trace_id}`), thêm `alerts.py` (job_failed/model_throttled/slow_stage, `/v1/alerts`, webhook https tùy chọn) và retention `MONITORING_RETENTION_DAYS`.
+- Đọc `docs/operations.md` trước khi sửa `monitoring/`. Đã điền `logging.py` (log JSON mọi service), `metrics.py` (`/v1/metrics?window_minutes`: p95/lỗi/token/job lỗi), `tracing.py` (`/v1/traces/{trace_id}`), thêm `alerts.py` (job_failed/model_throttled/slow_stage, `/v1/alerts`, webhook https tùy chọn) và retention `MONITORING_RETENTION_DAYS`.
 - `emit()` không còn gửi HTTP đồng bộ (trước đây collector sập làm chậm 2s/event): hàng đợi RAM + thread nền. Langfuse: mốc tiến độ là `event`, lỗi `level=ERROR`.
 - Dockerfile sắp lại: dependency trước, code sau (stage `shared`); code thuộc root. Sửa code không cài lại pip.
 - SQS backlog dùng CloudWatch alarm, không đo trong collector. 138/138 unit test, 9/9 healthy, E2E TXT + PNG exit 0.
 
 ## S3 tham chiếu cho MCP (2026-11-12, mới nhất)
 
-- Bucket `contract-risk-database-unique-333596350642-ap-southeast-1-an` (ap-southeast-1) nối vào MCP qua `mcp_server/s3_reader.py` (trong image mcp): tool `s3_list_objects` + `s3_get_object`, CHỈ ĐỌC (hook botocore chặn mọi thao tác ghi + IAM policy `infrastructure/aws/mcp-s3-readonly-policy.json`). Xem mục S3 trong `docs/mcp.md`.
+- Bucket `contract-risk-database-unique-333596350642-ap-southeast-1-an` (ap-southeast-1) nối vào MCP qua `mcp_server/s3_reader.py` (trong image mcp): tool `s3_list_objects` + `s3_get_object`, CHỈ ĐỌC (hook botocore chặn mọi thao tác ghi + IAM policy `infrastructure/aws/mcp-s3-readonly-policy.json`). Xem mục S3 trong `docs/ai_agents.md`.
 - Project chạy trên EC2: credential chỉ từ instance role (không đặt key trong .env). `preflight.sh` kiểm tra mcp list được bucket. Local không có credential nên chưa đọc bucket thật. 138/138 unit test, 9/9 healthy.
 
 ## Qdrant Cloud cho MCP (2026-11-12, mới nhất)
 
 - `mcp_server/qdrant_reader.py` (image mcp, thư viện `qdrant-client==1.20.0` trong mcp.txt): tool `qdrant_search` + `qdrant_collection_info`, chỉ đọc. Env `.env`: QDRANT_URL/QDRANT_API_KEY/QDRANT_COLLECTION=legal_documents (3072-d cosine, index `contract`). Đã bỏ connector REST cũ ở integrations/database.
-- Đã xác minh thật agent-2/3 → MCP → Qdrant Cloud (collection rỗng). Key hiện là quyền manage và đã lộ trong chat: nên thay bằng key read-only. Xem mục Qdrant trong `docs/mcp.md`.
+- Đã xác minh thật agent-2/3 → MCP → Qdrant Cloud (collection rỗng). Key hiện là quyền manage và đã lộ trong chat: nên thay bằng key read-only. Xem mục Qdrant trong `docs/ai_agents.md`.
 
 ## Supabase cho MCP (2026-11-12, mới nhất)
 
-- `mcp_server/supabase_reader.py` (image mcp, `supabase==2.34.1` trong mcp.txt): tool `supabase_select` + `supabase_list_tables`, CHỈ ĐỌC (hook httpx chặn mọi request khác GET; PostgREST GET = READ ONLY). Env SUPABASE_URL/SECRET_KEY/PUBLISHABLE_KEY/TABLES chỉ cấp cho mcp. Xem mục Supabase trong `docs/mcp.md`.
+- `mcp_server/supabase_reader.py` (image mcp, `supabase==2.34.1` trong mcp.txt): tool `supabase_select` + `supabase_list_tables`, CHỈ ĐỌC (hook httpx chặn mọi request khác GET; PostgREST GET = READ ONLY). Env SUPABASE_URL/SECRET_KEY/PUBLISHABLE_KEY/TABLES chỉ cấp cho mcp. Xem mục Supabase trong `docs/ai_agents.md`.
 - Schema public hiện 0 bảng. Secret key bỏ qua RLS và đã lộ trong chat: nên xoay key. 139/139 unit test, 9/9 healthy.
 
 ## Data pipeline pháp luật (2026-11-14, mới nhất)
 
-- Đọc mục 11 của `docs/data_pipeline_design.md` trước khi sửa `data_pipeline/`. Đã có code: 2 service systemd trên EC2, venv riêng, không Docker.
+- Đọc mục 11 của `docs/data_pipeline.md` trước khi sửa `data_pipeline/`. Đã có code: 2 service systemd trên EC2, venv riêng, không Docker.
 - SQS `contract-data-update-queue` (EventBridge Scheduler) CHỈ nối vào collector (`python -m data_pipeline collector`): mỗi message = 1 lượt vào vanban.chinhphu.vn. Không liên quan service Docker `workers/`.
-- Luồng HAI NHÁNH (mới nhất): web → collector → S3 (CHỈ file gốc) và web → collector → processor (bytes trong RAM, không qua S3) → Supabase + Qdrant. Không ghi JSON lên S3, không lưu local. Service processor chỉ retry job lỗi (tải lại từ web) + refresh hằng ngày. Cần chạy migration `002_versions_without_s3_json.sql`. Xem mục cuối `docs/data_pipeline_design.md`.
+- Luồng HAI NHÁNH (mới nhất): web → collector → S3 (CHỈ file gốc) và web → collector → processor (bytes trong RAM, không qua S3) → Supabase + Qdrant. Không ghi JSON lên S3, không lưu local. Service processor chỉ retry job lỗi (tải lại từ web) + refresh hằng ngày. Cần chạy migration `002_versions_without_s3_json.sql`. Xem mục cuối `docs/data_pipeline.md`.
 - Embedding KHÔNG dùng API key: `intfloat/multilingual-e5-large` (1024 chiều, fastembed CPU) dùng chung ở `integrations/external/embedding_client.py` cho pipeline và MCP `qdrant_search(query=...)`; collection Qdrant đã tạo lại 1024 chiều. (Thay quyết định OpenAI trước đó.) Mặc định đã chốt: bỏ payload `contract`, migration SQL dán tay, sửa đổi mơ hồ → needs_review, incremental hằng ngày + full hằng tuần.
 - Nhận mọi định dạng đính kèm (.doc/.rtf chuyển PDF bằng LibreOffice). Đã chạy thử vào Supabase thật: 10 văn bản (dòng thử có s3_keys local, phải xóa trước khi chạy EC2). Thu thập 2 danh sách: typegroupid=1 (Hiến pháp, ký hiệu HP-<năm>, bản mới nhất thay bản cũ) + typegroupid=3 (Luật/Bộ luật). Mỗi Điều có `legal_references`. 154/154 unit test; liệt kê thật 870/870; 2 PDF scan thật OCR → 66 Điều. Migration 001+002 đã chạy. Chạy thật luồng hai nhánh (2026-11-14): web → collector → processor → Supabase + Qdrant Cloud với 144/2025/QH15 (PDF có text, S3 dùng Moto vì local không có credential) → job done, 4 Điều, 33 vector, 60 quan hệ unresolved (chưa có luật gốc), tìm kiếm trả đúng; sau đó đã xóa sạch (6 bảng 0, Qdrant 0) và xóa model. Chưa chạy thật: S3, OCR trong luồng mới, EC2.
 
 ## Web search MCP = Tavily (2026-11-14, mới nhất)
 
-- Đã xóa web search ddgs (`integrations/external/search_client.py`, dependency `ddgs`, env WEB_SEARCH_*). `web_search` của MCP nay dùng Tavily: `mcp_server/tavily_search.py` trong image mcp, `tavily-python==0.8.5`, env `TAVILY_API_KEY`/`TAVILY_SEARCH_DEPTH`/`TAVILY_COUNTRY` chỉ cấp cho mcp; key ở root `.env` (gitignored), không ghi vào file tracked. Xem mục cuối `docs/mcp.md`.
+- Đã xóa web search ddgs (`integrations/external/search_client.py`, dependency `ddgs`, env WEB_SEARCH_*). `web_search` của MCP nay dùng Tavily: `mcp_server/tavily_search.py` trong image mcp, `tavily-python==0.8.5`, env `TAVILY_API_KEY`/`TAVILY_SEARCH_DEPTH`/`TAVILY_COUNTRY` chỉ cấp cho mcp; key ở root `.env` (gitignored), không ghi vào file tracked. Xem mục cuối `docs/ai_agents.md`.
 - Đã xác minh thật agent-2/3 → MCP → Tavily; 154/154 unit test, 9/9 healthy. Key đã lộ trong chat: nên xoay key. Chưa cài Tavily CLI/skills toàn máy theo SKILL.md.
 
 ## RAG pháp luật (2026-11-14, mới nhất)
 
-- Đọc `docs/rag.md` trước khi sửa `rag/`. RAG chạy trong service mcp (image COPY `rag/`), tool MCP `legal_search`; Agent 2 `legal_search` và Agent 3 `legal_reference` (alias `MCP_ALIASES`) bind tới nó. Agent không import `rag/`.
+- Đọc `docs/ai_agents.md` trước khi sửa `rag/`. RAG chạy trong service mcp (image COPY `rag/`), tool MCP `legal_search`; Agent 2 `legal_search` và Agent 3 `legal_reference` (alias `MCP_ALIASES`) bind tới nó. Agent không import `rag/`.
 - Luồng: metadata_filter (mặc định current + in_force; `as_of` theo valid_from/valid_to/replaced_on) → hybrid_search (dense e5 + sparse `keywords` BM25/IDF, RRF, 1 lệnh Qdrant) → gộp part thành nguyên Điều → reranker cross-encoder `jinaai/jina-reranker-v2-base-multilingual` (fastembed, `RAG_RERANK_MODEL`, rỗng = tắt) → evidence_formatter (citation, evidence_id, hiệu lực, nguồn S3/web, warnings).
 - `sparse_vector`/`shared()` ở `integrations/external/embedding_client.py` dùng chung cho pipeline và RAG (đổi tokenizer = index lại). Pipeline ghi dense + sparse, `valid_to` khi sửa đổi, `replaced_on` khi bị thay thế; `QdrantWriter.ensure_indexes()` tạo collection + 10 index. Qdrant Cloud `legal_documents` đã tạo lại (rỗng) với sparse vector, giữ strict mode.
-- 162/162 unit test (8 test `tests/unit/test_rag.py`). Chạy thật local với model thật + Qdrant Cloud: kết quả đúng (xem `docs/rag.md`), đã xóa dữ liệu thử và model. Chưa kiểm qua MCP từ container agent theo yêu cầu người dùng.
+- 162/162 unit test (8 test `tests/unit/test_rag.py`). Chạy thật local với model thật + Qdrant Cloud: kết quả đúng (xem `docs/ai_agents.md`), đã xóa dữ liệu thử và model. Chưa kiểm qua MCP từ container agent theo yêu cầu người dùng.
 
 ## Model agent = OpenAI, đã gỡ Bedrock (2026-11-14, mới nhất)
 
@@ -205,14 +210,14 @@
 
 ## Core agent: memory long/short term + prompt 3 loại (2026-11-14, mới nhất)
 
-- Đọc `docs/agent_core.md` trước khi sửa prompt/memory agent. Prompt mỗi agent: `prompts/core.md` (xử lý trung tâm, bắt buộc), `prompts/external.md` (khi nào dùng service ngoài/context bổ sung, bắt buộc), `prompts/examples/*.md` (tùy chọn). TẤT CẢ đang để trống theo yêu cầu — không tự viết nội dung. Đã xóa system.md/classify|evaluate|recommend.md/soul.md/constraints.md/context/instructions.md; `plan.md` chỉ là tài liệu, không nạp. Các mục cũ nhắc các file đó là lịch sử.
+- Đọc `docs/ai_agents.md` trước khi sửa prompt/memory agent. Prompt mỗi agent: `prompts/core.md` (xử lý trung tâm, bắt buộc), `prompts/external.md` (khi nào dùng service ngoài/context bổ sung, bắt buộc), `prompts/examples/*.md` (tùy chọn). TẤT CẢ đang để trống theo yêu cầu — không tự viết nội dung. Đã xóa system.md/classify|evaluate|recommend.md/soul.md/constraints.md/context/instructions.md; `plan.md` chỉ là tài liệu, không nạp. Các mục cũ nhắc các file đó là lịch sử.
 - Memory RIÊNG TỪNG AGENT, không dùng chung (yêu cầu người dùng): prompt memory ở `agents/<agent>/memory/short_term_summary.md` + `long_term_reflection.md` (đã bỏ `agents/shared/prompts/`); long term là file riêng `<LONG_TERM_MEMORY_DIR>/<agent_id>.sqlite3` (`LONG_TERM_MEMORY_DIR=/data/long_term_memory`, volume agent-n-data); short term là snapshot ContextEngine riêng của agent theo hợp đồng.
 - Short term = `agents/memory/short_term.py` (xóa sau khi lưu kết quả). Long term = `agents/memory/long_term.py`: sau mỗi job pipeline gọi `reflect` của từng agent (prompt của agent đó, trống → skipped) → bài `pending`; người duyệt bằng `python -m agents.memory.long_term list|approve|reject|add` trong container agent; chỉ `approved` vào prompt (≤30 bài/8000 ký tự). Reflection lỗi không làm hỏng job.
 - 170/170 unit test; 9/9 healthy sau build lại agent/langgraph.
 
 ## Một file env + AWS Secrets Manager (2026-11-14, mới nhất)
 
-- Đọc mục "AWS credential và secret access" trong `docs/environment.md` trước khi sửa env/secret. `.env.example` (tracked) và `.env` (gitignored) cùng bố cục 9 mục, mỗi key một lần; giữ `.env.example` vì `.env` không commit được. Đã gộp env data pipeline vào root `.env` (bỏ `data_pipeline/.env.example`, `/etc/contract-risk/data-pipeline.env`) và bỏ 9 biến `*_SECRET_BINDINGS`.
+- Đọc mục "AWS credential và secret access" trong `docs/operations.md` trước khi sửa env/secret. `.env.example` (tracked) và `.env` (gitignored) cùng bố cục 9 mục, mỗi key một lần; giữ `.env.example` vì `.env` không commit được. Đã gộp env data pipeline vào root `.env` (bỏ `data_pipeline/.env.example`, `/etc/contract-risk/data-pipeline.env`) và bỏ 9 biến `*_SECRET_BINDINGS`.
 - Secret `contract-risk/prod/api-keys` (JSON 11 key: INTERNAL_API_TOKEN, MCP_API_TOKEN, OPENAI_API_KEY, TAVILY_API_KEY, QDRANT_URL, QDRANT_API_KEY, SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, SUPABASE_SECRET_KEY, LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY), `API_KEYS_SECRET_ID` trong `.env`. `config/policy.json` cấp mỗi service đúng key nó dùng; compose `CONFIG_SECRET_BINDINGS` = danh sách đó (test kiểm khớp). Bootstrap chỉ lấy key RỖNG (giá trị `.env` thắng, không ghi đè); Config tự đọc INTERNAL_API_TOKEN; data pipeline đọc thẳng 4 key Qdrant/Supabase. Không có API_KEYS_SECRET_ID → 404 → chạy bằng `.env`.
 - Local `.env` để `API_KEYS_SECRET_ID` rỗng (máy không có credential AWS). IAM: `infrastructure/aws/config-secrets-policy.json` + `data-pipeline-policy.json`. Chưa gọi Secrets Manager thật (Moto). 176/176 unit test; 9/9 healthy; mỗi container chỉ có key của mình.
 - (cập nhật cùng ngày) Theo yêu cầu người dùng, 11 key trên ĐÃ XÓA khỏi `.env`, `.env.example` và docker-compose: chỉ lấy qua Config/Secrets Manager. Không ghi lại chúng vào file env. Local `.env` có `API_KEYS_SECRET_ID=contract-risk/prod/api-keys`; máy local hiện không có credential AWS nên stack local không khởi động lại được cho tới khi có credential đọc secret (container đang chạy vẫn giữ env cũ).
@@ -220,7 +225,7 @@
 
 ## Monitoring data pipeline + log terminal (2026-11-14, mới nhất)
 
-- Đọc mục cuối `docs/monitoring.md`. Pipeline (systemd trên host) gửi sự kiện `data-collector`/`data-processor` tới monitoring qua `127.0.0.1:${MONITORING_HOST_PORT:-8099}` (compose `ports` loopback-only) với `DATA_MONITORING_URL` + INTERNAL_API_TOKEN từ Secrets Manager. Mỗi lượt = 1 trace_id; field mới `document`, `count`; alert `data_run_*`, `data_document_failed`, `data_sqs_retry`.
+- Đọc mục cuối `docs/operations.md`. Pipeline (systemd trên host) gửi sự kiện `data-collector`/`data-processor` tới monitoring qua `127.0.0.1:${MONITORING_HOST_PORT:-8099}` (compose `ports` loopback-only) với `DATA_MONITORING_URL` + INTERNAL_API_TOKEN từ Secrets Manager. Mỗi lượt = 1 trace_id; field mới `document`, `count`; alert `data_run_*`, `data_document_failed`, `data_sqs_retry`.
 - Worker KHÔNG đổi: sự kiện pipeline không job-scoped nên không forward sang worker/DynamoDB.
 - `monitoring/logging.py`: `LOG_FORMAT=auto|json|text` (terminal → dòng đọc được); lỗi có `error_type`, `error_at`, `stack`; chỉ pipeline (`error_details=True`) in message + traceback. `data_pipeline/telemetry.py:report()` = log + emit (echo=False). `python -m data_pipeline ...` lỗi → log + exit 1.
 - 181/181 unit test. Chưa build/restart container monitoring: máy local không có credential AWS nên service không lấy được key sau khi đã xóa key khỏi `.env`.
@@ -257,7 +262,7 @@
 
 ## Prompt 3 agent + vòng tool + partner_document (2026-11-17, mới nhất)
 
-- Đọc `docs/agent_core.md` (mục Prompt và Vòng lặp gọi tool). Prompt ĐÃ ĐIỀN theo yêu cầu người dùng (thay quyết định "để trống" cũ): `prompts/soul.md` (mới, bắt buộc) + `core.md` + `external.md` cho 3 agent; nguồn từ `ContractGuard_4_2-4_5_Package.zip` (Extraction → Agent 1, Risk → Agent 2, nguyên văn sau phần "Áp dụng trong hệ thống"); Agent 3 viết mới. Schema output người dùng tự thiết kế sau: prompt chỉ ràng buộc "theo schema trong source code"; đặt file `agents/<agent>/schemas/output.schema.json` thì loader tự nạp.
+- Đọc `docs/ai_agents.md` (mục Prompt và Vòng lặp gọi tool). Prompt ĐÃ ĐIỀN theo yêu cầu người dùng (thay quyết định "để trống" cũ): `prompts/soul.md` (mới, bắt buộc) + `core.md` + `external.md` cho 3 agent; nguồn từ `ContractGuard_4_2-4_5_Package.zip` (Extraction → Agent 1, Risk → Agent 2, nguyên văn sau phần "Áp dụng trong hệ thống"); Agent 3 viết mới. Schema output người dùng tự thiết kế sau: prompt chỉ ràng buộc "theo schema trong source code"; đặt file `agents/<agent>/schemas/output.schema.json` thì loader tự nạp.
 - Agent 1 `examples/` = 10 hợp đồng mẫu rút gọn (chỉ cách tách). Agent 2 `prompts/rules/risk_policy.json` = file luật (đối chiếu sau khi chấm điểm để xác định loại rủi ro); `examples/` = 3 báo cáo từ `risk_rule_report.json` (file đó là kết quả chấm 100 hợp đồng mẫu, không phải danh mục luật).
 - `agents/base.py:run`: vòng function calling với tool MCP (spec từ `list_tools`, ≤6 vòng, lỗi tool trả cho model) + đánh giá lại khi output JSON có `evidence_gaps` không rỗng (≤2 lần). Schema của Agent 2/3 phải có khóa gốc `evidence_gaps`. Đây là nhánh "thiếu dữ liệu → RAG/Search → đánh giá lại" trước đây còn thiếu.
 - MCP tool thứ 10 `partner_document` (chỉ Agent 3): đọc tài liệu gốc trong bucket ContractGuard (`PARTNER_S3_BUCKET=${WORKER_INPUT_BUCKET}`), chỉ `quarantine/`/`clean/`, chỉ đọc; PDF/DOCX/ảnh trích qua service input-processing. Worker thêm `context.source_document`. IAM đối tác chỉ cho GetObject `quarantine/*`.
@@ -265,7 +270,7 @@
 
 ## Schema nghiệp vụ (Pydantic) vào/ra ContractGuard + 3 agent + nén memory (2026-11-17, mới nhất)
 
-- Đọc mục cuối `docs/workers.md` và mục "Schema nghiệp vụ của 3 agent" trong `docs/agent_core.md`. Theo yêu cầu người dùng đã XÓA mọi file JSON schema làm trước đó (`common/schemas/worker/*.json`, `agents/*/schemas/output.schema.json`, `docs/schemas/`); không chép file schema của đối tác vào repo.
+- Đọc mục cuối `docs/workers.md` và mục "Schema nghiệp vụ của 3 agent" trong `docs/ai_agents.md`. Theo yêu cầu người dùng đã XÓA mọi file JSON schema làm trước đó (`common/schemas/worker/*.json`, `agents/*/schemas/output.schema.json`, `docs/schemas/`); không chép file schema của đối tác vào repo.
 - Schema nghiệp vụ RIÊNG bằng Pydantic (có sẵn trong mọi image): `common/schemas/business/inbound.py` (nhận mọi mục ContractGuard gửi, giữ trường lạ), `outbound.py` (trả đủ mọi mục họ nhận, cấm khóa lạ), `shared.py`; agent: `agents/<agent>/schemas/input.py` + `output.py` (ClassificationResult / RiskScoringResult / RecommendationResult). Mục "Output nghiệp vụ vs ContractGuard" phía trên đã được xử lý.
 - Worker đưa TOÀN BỘ request.json vào `context.request` (exclude_unset: đúng như đối tác gửi); prompt, MCP `partner_document`, bộ dựng kết quả đọc từ đây. LangGraph dựng + kiểm `AnalysisResult` (`orchestration/extraction.py`, điểm 4.5b ở `orchestration/scoring.py`), worker chỉ ghi; `WorkflowServiceClient.execute` trả kết quả này.
 - Worker: `check_outbound` = `OutboundMessage`; bước tiến độ 4 giá trị; `limits.max_bytes/max_pages`; kiểm `declared_file_type`; quá trang → ERR-UPL-004. Prompt nén memory 3 agent đã điền.
@@ -273,7 +278,7 @@
 
 ## Kiểm luồng bàn giao + quy định prompt/context (2026-11-17, mới nhất)
 
-- Đọc mục "Bàn giao giữa các agent" trong `docs/agent_workflow.md`. Quy định của người dùng: prompt = giá trị cố định dev nhập từ file; context = giá trị động lúc chạy (result, MCP).
+- Đọc mục "Bàn giao giữa các agent" trong `docs/ai_agents.md`. Quy định của người dùng: prompt = giá trị cố định dev nhập từ file; context = giá trị động lúc chạy (result, MCP).
 - `job_id` thật đi qua LangGraph: state → bản tổng hợp Agent 1 → `context.workflow.job_id` của Agent 2/3 (`RiskScoringWorkflow`/`RecommendationWorkflow` bắt buộc). `run_contract(..., job_id, runtime_id=None)`; service truyền runtime riêng, khóa cache không đổi.
 - Đã bỏ 2 câu hướng dẫn viết cứng trong `agents/base.py`: nay là `prompts/fix_format.md` (3 agent) và `prompts/reevaluate.md` (Agent 2/3), `config_loader.follow_up_prompt` chỉ điền `{problems}`/`{gaps}`; thiếu file khi cần → `TODO: fill`. Còn lại trong code chỉ là nhãn (`# Rules`, `# Examples`, `# Output schema`), JSON Schema sinh từ model và mô tả tool MCP.
 - Agent 3: MCP nối 2 bucket — đối tác (`partner_document`) và S3 pháp luật (`s3_list_objects`/`s3_get_object`); prompt service đã ghi rõ cách dùng từng bucket. 219/219 unit test.
@@ -281,14 +286,14 @@
 ## Sửa lỗi theo báo cáo rà luồng (2026-11-17, mới nhất)
 
 - Worker: `CurrentClient.get` trả None cho job chưa đăng ký (trước đây ném LeaseLost nên không gửi được `failed`); `metadata` phải là object; kết quả input-processing phải đúng cả `contract_version`.
-- Data pipeline (mục cuối `docs/data_pipeline_design.md`): collector bù job thiếu, retry kiểm hash, `apply_amendment` hoàn tác khi lỗi.
-- Extraction: không tính điểm verdict trích sai, trùng clause_id → lỗi, kẹp trang. Agent: kết quả tool rút ngắn giữ JSON, ngân sách kiểm lại trong vòng tool, handoff nén kèm `ids` (mục cuối `docs/agent_core.md`).
-- MCP: `partner_document` chỉ đọc key của job (header `x-job-context`), event MCP có job/trace id (mục cuối `docs/mcp.md`). Monitoring giữ `cache_read_tokens`, `reasoning_tokens`.
+- Data pipeline (mục cuối `docs/data_pipeline.md`): collector bù job thiếu, retry kiểm hash, `apply_amendment` hoàn tác khi lỗi.
+- Extraction: không tính điểm verdict trích sai, trùng clause_id → lỗi, kẹp trang. Agent: kết quả tool rút ngắn giữ JSON, ngân sách kiểm lại trong vòng tool, handoff nén kèm `ids` (mục cuối `docs/ai_agents.md`).
+- MCP: `partner_document` chỉ đọc key của job (header `x-job-context`), event MCP có job/trace id (mục cuối `docs/ai_agents.md`). Monitoring giữ `cache_read_tokens`, `reasoning_tokens`.
 - (Đã điền ở mục 2026-11-18.) 236/236 unit test; chưa build/chạy lại container cho đợt này.
 
 ## Chọn model + Responses API + sửa lỗi đợt 2 (2026-11-18, mới nhất)
 
-- Đọc mục cuối `docs/agent_core.md`. Model: Agent 1 `gpt-6-luna`, Agent 2/3 `gpt-6.1-sol` (config.yaml), key đã ở Secrets Manager. Provider chuyển sang OpenAI **Responses API** (Sol chỉ gọi tool qua Responses); mục "Chat Completions" ở trên là lịch sử. `configs/memory.yaml` đã điền (A1 300k, A2/A3 900k).
+- Đọc mục cuối `docs/ai_agents.md`. Model: Agent 1 `gpt-6-luna`, Agent 2/3 `gpt-6.1-sol` (config.yaml), key đã ở Secrets Manager. Provider chuyển sang OpenAI **Responses API** (Sol chỉ gọi tool qua Responses); mục "Chat Completions" ở trên là lịch sử. `configs/memory.yaml` đã điền (A1 300k, A2/A3 900k).
 - Data pipeline: phiên bản file mới chỉ thay bản cũ sau khi lưu + index xong (lỗi → bản cũ giữ nguyên, `delete_document` đã bỏ); collector tối đa 4 văn bản cùng lúc (`DOCUMENTS_IN_FLIGHT`); TXT thành 1 trang; trang PDF lỗi `KeyError` = trang trống.
 - MCP `partner_document`: TXT theo đuôi file (PDF ASCII vẫn qua input-processing); key được phép lấy từ `results/<job_id>/request.json` của chính job (không tin header); agent chỉ gửi identity.
 - Orchestration/Agent: kết quả cuối dựng trước khi cache `complete`; gộp chunk kiểm chunk_id + continuation; Agent 1 kiểm nguyên văn/quote/trang; context agent bỏ `preprocessing.extraction`; overlap chunk mặc định 0; input-processing báo lỗi nếu có ký tự không thuộc chunk nào.
@@ -296,9 +301,9 @@
 
 ## Dọn file rỗng và tài liệu triển khai (2026-11-18)
 
-- Đọc `docs/project_cleanup.md` để biết 28 placeholder đã bỏ và mục đích các file rỗng giữ lại. Không tạo lại YAML/script/schema/port rỗng; config thực tế là `.env`, `config/policy.json`, `configs/memory.yaml`, config từng agent.
+- 28 placeholder đã bỏ; biên bản `docs/project_cleanup.md` đã xóa 2026-11-26, xem bằng git. Không tạo lại YAML/script/schema/port rỗng; config thực tế là `.env`, `config/policy.json`, `configs/memory.yaml`, config từng agent.
 - Giữ package markers, prompt `long_term_reflection.md` và ba folder danh mục chờ đối tác; không tự điền prompt hoặc sửa source Hermes upstream khi cleanup.
-- README đã mô tả runtime hiện tại; hướng dẫn GitHub → EC2 → Docker + systemd ở `docs/ec2_setup_guide.md`. `docs/deployment_ec2.md` dẫn về đó. Báo cáo EC2/testing theo ngày là lịch sử.
+- README đã mô tả runtime hiện tại; hướng dẫn GitHub → EC2 → Docker + systemd ở `docs/operations.md`. `docs/operations.md` dẫn về đó. Báo cáo EC2/testing theo ngày là lịch sử.
 - Còn 8 notebook có nội dung: 4 notebook cũ và 3 agent + 1 tổng thể gọi unit test có sẵn. Chọn theo `tests/README.md`; notebook service dùng pyproject.toml để tìm root, không phụ thuộc plan_work.txt.
 - Kiểm tra cleanup: 217 Python AST, 8 notebook schema, 58 lượt test qua code cell của 4 notebook và Compose config đạt. Không chạy lại full suite, Docker build, cloud hay EC2 trong đợt này.
 
@@ -306,7 +311,7 @@
 
 - `inference_config` đã điền: Agent 1 gpt-6-luna effort medium, 32.000 token ra; Agent 2 gpt-6.1-sol effort high, 128.000;
   Agent 3 gpt-6.1-sol effort medium, 128.000. temperature/top_p để trống. Bảng + lý do + giá ở mục "Model + Responses API"
-  của `docs/agent_core.md`. `config_loader` từ chối effort/max_completion_tokens sai khi nạp.
+  của `docs/ai_agents.md`. `config_loader` từ chối effort/max_completion_tokens sai khi nạp.
 - Root `.env` local đã đổi `MODEL_PROVIDER=openai` (chạy model thật). Smoke/E2E container cần `MODEL_PROVIDER=fixture`.
   248/248 unit test. Chưa gọi OpenAI thật.
 
@@ -318,7 +323,7 @@
 
 ## Model 3 agent = Gemini + prompt song ngữ (2026-11-23, mới nhất)
 
-- Đọc mục cuối `docs/agent_core.md`. Ba agent dùng `gemini-3.5-flash-lite` qua `integrations/external/gemini_client.py`
+- Đọc mục cuối `docs/ai_agents.md`. Ba agent dùng `gemini-3.5-flash-lite` qua `integrations/external/gemini_client.py`
   (REST httpx, giữ `thoughtSignature` qua vòng tool); `openai_client.py` đã xoá. Mọi mục trước nói OpenAI/Responses API
   /gpt-6-luna/gpt-6.1-sol/`OPENAI_API_KEY` nay là lịch sử. `MODEL_PROVIDER=gemini|fixture`, env `GEMINI_MODEL`,
   `GEMINI_API_KEY`, `AGENT_n_MODEL`.
@@ -332,7 +337,7 @@
 
 ## Monitoring, DynamoDB và cancel (2026-11-24, mới nhất)
 
-- Đọc `docs/workers.md` (mục "Hai bảng DynamoDB" và "Cancel, lỗi và output lỗi") và đầu `docs/langfuse_monitoring.md` trước khi sửa.
+- Đọc `docs/workers.md` (mục "Hai bảng DynamoDB" và "Cancel, lỗi và output lỗi") và đầu `docs/operations.md` trước khi sửa.
 - Langfuse: mặc định `LANGFUSE_ENABLED=true`; lệnh kiểm `python -m monitoring.langfuse_exporter` trong container monitoring;
   `/readyz` có `langfuse_error`/`langfuse_pending`; event bị từ chối không chặn event sau. Chưa xác nhận trên EC2/Langfuse thật.
 - DynamoDB: jobs = mỗi hợp đồng một dòng (`location` + `status`), ghi đè mỗi bước, giữ nguyên khi xong tới job mới cùng contract;

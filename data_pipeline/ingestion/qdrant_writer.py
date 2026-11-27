@@ -31,7 +31,7 @@ class QdrantWriter:
         params = self.client.get_collection(self.collection).config.params
         if SPARSE_VECTOR not in (params.sparse_vectors or {}):
             raise RuntimeError(f"Collection {self.collection} has no sparse vector '{SPARSE_VECTOR}': recreate it "
-                               "(empty) so hybrid search works; see docs/rag.md")
+                               "(empty) so hybrid search works; see docs/ai_agents.md")
 
     def ensure_indexes(self):
         self.ensure_collection()

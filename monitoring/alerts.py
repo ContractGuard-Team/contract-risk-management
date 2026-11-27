@@ -1,7 +1,7 @@
 """Alert rules over sanitized events; deduplicated, stored, printed and optionally sent to a webhook.
 
 SQS backlog/age is measured by AWS, not by this collector: use a CloudWatch alarm on
-ApproximateAgeOfOldestMessage / ApproximateNumberOfMessagesVisible (see docs/monitoring.md).
+ApproximateAgeOfOldestMessage / ApproximateNumberOfMessagesVisible (see docs/operations.md).
 """
 import json
 import os

@@ -31,6 +31,6 @@ Notebook từng agent và tổng thể gọi lại unittest, không tạo bộ a
 
 ## Kiểm thử tích hợp Docker
 
-[container_smoke.py](integration/container_smoke.py) kiểm tra toàn luồng qua HTTP với Moto/model fixture; [handoff_audit.py](integration/handoff_audit.py) kiểm dữ liệu bàn giao. Làm theo [docs/testing.md](../docs/testing.md) trong stack thử riêng. Không chạy bài smoke vào stack production đang nhận job.
+[container_smoke.py](integration/container_smoke.py) kiểm tra toàn luồng qua HTTP với Moto/model fixture; [handoff_audit.py](integration/handoff_audit.py) kiểm dữ liệu bàn giao. Làm theo [docs/operations.md](../docs/operations.md) mục 4 trong stack thử riêng. Không chạy bài smoke vào stack production đang nhận job.
 
-Fixture pháp luật hiện dùng nằm trong `fixtures/data_pipeline/`. Test khác chủ động tạo dữ liệu trong code/thư mục tạm. Các notebook và thư mục fixture chỉ có placeholder đã được loại bỏ; xem [biên bản cleanup](../docs/project_cleanup.md).
+Fixture pháp luật hiện dùng nằm trong `fixtures/data_pipeline/`. Test khác chủ động tạo dữ liệu trong code/thư mục tạm. Các notebook và thư mục fixture chỉ có placeholder đã được loại bỏ.
